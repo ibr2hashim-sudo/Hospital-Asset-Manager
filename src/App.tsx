@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User } from './types';
 import { StorageService } from './services/storage';
+import { FirestoreSyncService } from './services/firestoreSync';
 import { Navbar } from './components/Navbar';
 import { LoginView } from './components/LoginView';
 import { DashboardView } from './components/DashboardView';
@@ -66,9 +67,14 @@ export default function App() {
     setCurrentUser(StorageService.getCurrentUser());
   }, []);
 
-  // Initial load
+  // Initial load & real-time sync with user's Firebase
   useEffect(() => {
     reloadData();
+
+    // Start real-time sync with User's Firebase
+    FirestoreSyncService.initRealtimeListeners(() => {
+      reloadData();
+    });
 
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);

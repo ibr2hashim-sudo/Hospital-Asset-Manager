@@ -7,13 +7,16 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 // Initialize Firestore with specific databaseId and long polling auto-detection for reliable web/iframe connectivity
 function initFirestoreInstance() {
-  const dbId = firebaseConfig.firestoreDatabaseId || undefined;
+  const rawDbId = firebaseConfig.firestoreDatabaseId;
+  const dbId = (!rawDbId || rawDbId === '(default)') ? undefined : rawDbId;
   try {
-    return initializeFirestore(app, {
-      experimentalAutoDetectLongPolling: true,
-    }, dbId);
+    return initializeFirestore(
+      app,
+      { experimentalAutoDetectLongPolling: true },
+      ...(dbId ? [dbId] : [])
+    );
   } catch {
-    return getFirestore(app, dbId);
+    return dbId ? getFirestore(app, dbId) : getFirestore(app);
   }
 }
 
@@ -24,7 +27,18 @@ export const db = initFirestoreInstance();
  */
 export async function testFirestoreConnection(): Promise<{ ok: boolean; error?: string; isOffline?: boolean; isQuota?: boolean }> {
   try {
+    try {
+      const cooldown = parseInt(localStorage.getItem('eco_sync_quota_cooldown_until') || '0', 10);
+      if (Date.now() < cooldown) {
+        return { ok: false, isQuota: true, error: 'Quota cooling down' };
+      }
+    } catch {}
+
     await getDocFromServer(doc(db, 'settings', 'sync_meta'));
+    try {
+      localStorage.removeItem('eco_sync_quota_cooldown_until');
+      localStorage.removeItem('eco_sync_quota_exceeded');
+    } catch {}
     return { ok: true };
   } catch (error: any) {
     const msg = error?.message || String(error || '');

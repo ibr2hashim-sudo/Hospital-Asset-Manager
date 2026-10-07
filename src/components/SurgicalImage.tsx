@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getImageFromDB } from '../services/storage';
+import { getImageFromDB, saveImageToDB } from '../services/storage';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 // In-memory cache for zero-latency synchronous re-rendering
 const surgicalImageCache = new Map<string, string>();

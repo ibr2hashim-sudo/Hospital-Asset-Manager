@@ -1,12 +1,10 @@
 {
-  "projectId": "virtual-ground-bdpgw",
-  "appId": "1:798786467447:web:a20799dce7e4facc4ab872",
-  "apiKey": "AIzaSyDWtx7dW_qIz7gQI0yTQkfJVmI23qHbAeo",
-  "authDomain": "virtual-ground-bdpgw.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-assetsyncmainten-c86438fb-5892-4c4f-90fa-bb09ae52e5b2",
-  "storageBucket": "virtual-ground-bdpgw.firebasestorage.app",
-  "messagingSenderId": "798786467447",
-  "measurementId": "",
-  "oAuthClientId": "798786467447-dlr9f83bogq7olk1rqtearv26lr9qmdm.apps.googleusercontent.com",
-  "recaptchaSiteKey": ""
+  "projectId": "hospital-asset-manager-76452",
+  "appId": "1:1095868619313:web:d380d632d810e06890c1310",
+  "apiKey": "AIzaSyAGTL-e4FgkQ6i8P1qxfbGALYZIKAg-kqs",
+  "authDomain": "hospital-asset-manager-76452.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "hospital-asset-manager-76452.firebasestorage.app",
+  "messagingSenderId": "1095868619313",
+  "measurementId": "G-C6YC6RwWJ5"
 }

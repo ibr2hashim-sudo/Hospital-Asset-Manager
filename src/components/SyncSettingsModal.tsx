@@ -8,10 +8,11 @@ import {
   CheckCircle2,
   AlertCircle,
   ShieldCheck,
-  HardDrive,
   FileJson,
   RefreshCw,
+  Cloud,
 } from 'lucide-react';
+import { FirestoreSyncService } from '../services/firestoreSync';
 import { StorageService } from '../services/storage';
 import { SurgicalStorageService } from '../services/surgicalStorage';
 import { ExcelUtils } from '../utils/excelImportExport';
@@ -30,6 +31,11 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
 }) => {
   const isAdmin = currentUser?.role === 'admin';
 
+  // Cloud sync states
+  const [isPushingCloud, setIsPushingCloud] = useState(false);
+  const [isPullingCloud, setIsPullingCloud] = useState(false);
+
+  // Backup states
   const [isExportingBackup, setIsExportingBackup] = useState(false);
   const [isImportingBackup, setIsImportingBackup] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -38,7 +44,53 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   const excelComprehensiveInputRef = useRef<HTMLInputElement>(null);
   const fullBackupInputRef = useRef<HTMLInputElement>(null);
 
-  // 1. Export Complete System Backup (All tables + all high-res images in IndexedDB)
+  // 1. Push all local data to User's Firebase
+  const handlePushToCloud = async () => {
+    setIsPushingCloud(true);
+    setStatusMsg({ text: 'جاري رفع ومزامنة كافة السجلات إلى قاعدة بياناتك في Firebase...', type: 'info' });
+    try {
+      const res = await FirestoreSyncService.pushAllLocalDataToFirestore();
+      setStatusMsg({
+        text: res.message,
+        type: res.success ? 'success' : 'error',
+      });
+      if (res.success) {
+        onRefresh();
+      }
+    } catch (err: any) {
+      setStatusMsg({
+        text: `فشل الرفع السحابي: ${err?.message || 'خطأ غير متوقع'}`,
+        type: 'error',
+      });
+    } finally {
+      setIsPushingCloud(false);
+    }
+  };
+
+  // 2. Pull all cloud data from User's Firebase
+  const handlePullFromCloud = async () => {
+    setIsPullingCloud(true);
+    setStatusMsg({ text: 'جاري تنزيل وتحديث كافة البيانات من سحابتك إلى هذا الجهاز...', type: 'info' });
+    try {
+      const res = await FirestoreSyncService.pullAllCloudDataToLocal();
+      setStatusMsg({
+        text: res.message,
+        type: res.success ? 'success' : 'error',
+      });
+      if (res.success) {
+        onRefresh();
+      }
+    } catch (err: any) {
+      setStatusMsg({
+        text: `فشل الجلب السحابي: ${err?.message || 'خطأ غير متوقع'}`,
+        type: 'error',
+      });
+    } finally {
+      setIsPullingCloud(false);
+    }
+  };
+
+  // 3. Export Complete Backup (Data + Images)
   const handleExportFullBackup = async () => {
     setIsExportingBackup(true);
     setStatusMsg({ text: 'جاري جمع وضغط كافة البيانات وسجلات الأصول وجميع الصور من ذاكرة المتصفح...', type: 'info' });
@@ -69,7 +121,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 2. Import Complete System Backup
+  // 4. Import Complete Backup (Data + Images)
   const handleImportFullBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -105,7 +157,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 3. Export Comprehensive Excel
+  // 5. Export Comprehensive Excel
   const handleExportComprehensiveExcel = () => {
     try {
       const users = StorageService.getUsers();
@@ -138,7 +190,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 4. Import Comprehensive Excel
+  // 6. Import Comprehensive Excel
   const handleImportComprehensiveExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -180,25 +232,27 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
+  const projectId = FirestoreSyncService.getProjectId();
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-right border border-slate-100 animate-in fade-in zoom-in-95 duration-200">
+      <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-right border border-slate-100 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
         
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
-              <HardDrive className="w-5 h-5 text-white" />
+              <Cloud className="w-5 h-5 text-white" />
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <span>إدارة النسخ الاحتياطي والبيانات</span>
+                <span>المزامنة وإدارة البيانات</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
-                  تخزين محلي آمن 🟢
+                  متصل بـ Firebase 🟢
                 </span>
               </h3>
-              <p className="text-xs text-slate-500">
-                حفظ واسترجاع كافة البيانات والصور محلياً بدون إنترنت
+              <p className="text-xs text-slate-500 font-mono">
+                مشروعك: {projectId}
               </p>
             </div>
           </div>
@@ -232,16 +286,48 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
           </div>
         )}
 
-        {/* Local Storage Status Banner */}
-        <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2 text-slate-700">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-            <span className="font-semibold">طريقة الحفظ:</span>
-            <span className="text-emerald-700 font-bold">ذاكرة المتصفح و IndexedDB (فوري وبدون قيود)</span>
+        {/* Section 1: User's Private Firebase Cloud */}
+        <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50/80 via-indigo-50/40 to-slate-50 border border-blue-100/90 space-y-3.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
+                <Database className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-900 text-sm">
+                  قاعدة بياناتك السحابية الخاصة (Firebase Firestore)
+                </h4>
+                <p className="text-[11px] text-slate-500 font-mono">
+                  {projectId}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={handlePushToCloud}
+              disabled={isPushingCloud || isPullingCloud}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
+            >
+              <RefreshCw className={`w-4 h-4 ${isPushingCloud ? 'animate-spin' : ''}`} />
+              <span>{isPushingCloud ? 'جاري الرفع...' : 'رفع ومزامنة البيانات لسحابتي'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePullFromCloud}
+              disabled={isPushingCloud || isPullingCloud}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
+            >
+              <Download className={`w-4 h-4 ${isPullingCloud ? 'animate-spin' : ''}`} />
+              <span>{isPullingCloud ? 'جاري التنزيل...' : 'جلب وتحديث البيانات من سحابتي'}</span>
+            </button>
           </div>
         </div>
 
-        {/* Section 1: Complete System Backup (Data + High-Res Images) */}
+        {/* Section 2: Complete System Backup (Data + High-Res Images) */}
         <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/70 via-blue-50/40 to-slate-50 border border-indigo-100/80 space-y-3.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -285,7 +371,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
           </div>
         </div>
 
-        {/* Section 2: Excel Comprehensive File (Visible to Admin Only) */}
+        {/* Section 3: Excel Comprehensive File (Visible to Admin Only) */}
         {isAdmin && (
           <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50/70 via-teal-50/40 to-slate-50 border border-emerald-100/80 space-y-3.5">
             <div className="flex items-center justify-between">

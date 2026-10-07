@@ -33,6 +33,7 @@ import { BarcodeCameraScanner } from './BarcodeCameraScanner';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { formatSyncTimestamp } from '../utils/syncUtils';
+import { compressImageForCloud } from '../utils/cloudImageCompressor';
 
 interface AssetsViewProps {
   currentUser: User | null;
@@ -150,7 +151,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
         list = list.filter((a) => a.mainDepartment.trim() === selectedDept.trim());
       }
 
-      if (selectedSubDept) {
+      if (selectedSubDept && selectedSubDept !== selectedDept) {
         list = list.filter((a) => {
           const sub = a.subDepartment ? a.subDepartment.trim() : a.mainDepartment.trim();
           return sub === selectedSubDept.trim();
@@ -372,6 +373,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       <div className="relative h-44 bg-slate-100 flex items-center justify-center overflow-hidden">
         <AssetImage
           src={asset.imageUrl}
+          hasCloudImage={asset.hasCloudImage}
           customId={asset.customId}
           serialNumber={asset.serialNumber}
           deviceName={asset.deviceName}
@@ -1438,14 +1440,19 @@ const AddEditAssetModal: React.FC<AddEditAssetModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setImageUrl(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressImageForCloud(file);
+      setImageUrl(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setImageUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const toggleAccessory = (acc: string) => {
@@ -1868,6 +1875,7 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
         <div className="h-60 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
           <AssetImage
             src={asset.imageUrl}
+            hasCloudImage={asset.hasCloudImage}
             customId={asset.customId}
             serialNumber={asset.serialNumber}
             deviceName={asset.deviceName}

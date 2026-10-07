@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ImageIcon, Maximize2, X } from 'lucide-react';
-import { getImageFromDB } from '../services/storage';
+import { getImageFromDB, saveImageToDB } from '../services/storage';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 // Global in-memory cache for ultra-fast instant synchronous rendering
 const inMemoryImageCache = new Map<string, string>();
@@ -46,6 +47,7 @@ export function normalizeImageUrl(url?: string | null): string | null {
 
 interface AssetImageProps {
   src?: string | null;
+  hasCloudImage?: boolean;
   customId?: string;
   serialNumber?: string;
   deviceName?: string;
@@ -60,6 +62,7 @@ interface AssetImageProps {
 
 export const AssetImage: React.FC<AssetImageProps> = ({
   src,
+  hasCloudImage,
   customId,
   serialNumber,
   deviceName,
@@ -72,6 +75,10 @@ export const AssetImage: React.FC<AssetImageProps> = ({
   onClick,
 }) => {
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(() => {
+    // If there is strictly no image reference, return null immediately without any lookups
+    if (!src && !hasCloudImage) {
+      return null;
+    }
     // Initial check from memory cache or direct data URI
     if (src && (src.startsWith('data:') || src.startsWith('http'))) {
       return normalizeImageUrl(src);
@@ -94,6 +101,13 @@ export const AssetImage: React.FC<AssetImageProps> = ({
   useEffect(() => {
     let isMounted = true;
     setHasError(false);
+
+    // If strictly NO image is associated with this asset, do NOT query DB or Firestore
+    if (!src && !hasCloudImage) {
+      setResolvedSrc(null);
+      setIsLoading(false);
+      return;
+    }
 
     // 1. Direct valid URL
     if (src && !src.startsWith('idb://')) {
@@ -134,12 +148,12 @@ export const AssetImage: React.FC<AssetImageProps> = ({
             return;
           }
         }
+
         if (isMounted) {
           setResolvedSrc(null);
           setIsLoading(false);
         }
       } catch (err) {
-        console.warn('AssetImage: failed to retrieve from IndexedDB', err);
         if (isMounted) {
           setResolvedSrc(null);
           setIsLoading(false);

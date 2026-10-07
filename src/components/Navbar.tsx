@@ -19,6 +19,7 @@ import {
   Zap,
   Scissors,
   HardDrive,
+  Cloud,
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -192,15 +193,15 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Right Controls: Local Data & Backup, History, Reset, User Profile */}
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Local Data & Backup Management */}
+            {/* Cloud & Data Management */}
             <div className="flex items-center gap-1.5">
               <button
                 onClick={onOpenSyncSettings}
-                title="إدارة البيانات والنسخ الاحتياطي الشامل (محلي)"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 hover:text-indigo-200 border border-indigo-500/30 transition-all text-xs font-bold shadow-xs"
+                title="المزامنة السحابية وإدارة البيانات"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-blue-200 border border-blue-500/30 transition-all text-xs font-bold shadow-xs"
               >
-                <HardDrive className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="hidden sm:inline">النسخ الاحتياطي والبيانات</span>
+                <Cloud className="w-3.5 h-3.5 text-blue-400" />
+                <span className="hidden sm:inline">السحابة والبيانات</span>
               </button>
             </div>
 
