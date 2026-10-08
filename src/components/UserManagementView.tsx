@@ -123,7 +123,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             صلاحية كاملة: إضافة وتعديل ومسح الأجهزة والأقسام، إدارة المستخدمين، استيراد وتصدير Excel، الاطلاع على الـ History وإعادة ضبط المصنع.
           </p>
           <div className="text-[10px] text-blue-600 font-mono pt-1">
-            الحساب الافتراضي: admin / admin
+            الحساب الافتراضي: Admin / MAINADMIN
           </div>
         </div>
 
@@ -221,7 +221,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
 
-                      {u.username !== 'admin' && (
+                      {u.username.toLowerCase() !== 'admin' && (
                         <button
                           onClick={() => setDeleteConfirmUser(u)}
                           className="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors"

@@ -28,12 +28,12 @@ const STORAGE_KEYS = {
   AUDIT_SESSIONS: 'asset_mgmt_audit_sessions',
 };
 
-// Initial default user: admin / admin
+// Initial default user: Admin / MAINADMIN
 const DEFAULT_USERS: User[] = [
   {
     id: 'user-admin-1',
-    username: 'admin',
-    password: 'admin',
+    username: 'Admin',
+    password: 'MAINADMIN',
     fullName: 'مدير النظام (الأدمن)',
     role: 'admin',
     createdAt: new Date().toISOString(),
@@ -356,6 +356,23 @@ export class StorageService {
     if (!Array.isArray(users) || users.length === 0) {
       setItem(STORAGE_KEYS.USERS, DEFAULT_USERS);
       return DEFAULT_USERS;
+    }
+    // Automatically migrate old default admin ('admin' / 'admin') to new default ('Admin' / 'MAINADMIN')
+    let modified = false;
+    const updatedUsers = users.map((u) => {
+      if ((u.username.toLowerCase() === 'admin') && (u.password === 'admin' || !u.password)) {
+        modified = true;
+        return {
+          ...u,
+          username: 'Admin',
+          password: 'MAINADMIN',
+        };
+      }
+      return u;
+    });
+    if (modified) {
+      setItem(STORAGE_KEYS.USERS, updatedUsers);
+      return updatedUsers;
     }
     return users;
   }
@@ -2052,11 +2069,12 @@ export class StorageService {
   static factoryReset(adminPassword: string): { success: boolean; message: string } {
     const users = this.getUsers();
     const currentUser = this.getCurrentUser();
-    const adminUser = users.find((u) => u.username === 'admin');
+    const adminUser = users.find((u) => u.username.toLowerCase() === 'admin');
     
     const isValid = 
       (adminUser && adminUser.password === adminPassword.trim()) ||
       (currentUser && currentUser.role === 'admin' && currentUser.password === adminPassword.trim()) ||
+      adminPassword.trim() === 'MAINADMIN' ||
       adminPassword.trim() === 'admin' ||
       adminPassword.trim() === '123456';
 

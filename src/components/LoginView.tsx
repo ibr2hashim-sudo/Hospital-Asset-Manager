@@ -99,7 +99,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
                 autoFocus
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="أدخل اسم المستخدم (مثال: admin)"
+                placeholder="أدخل اسم المستخدم"
                 className="w-full pl-3 pr-10 py-3 rounded-xl bg-slate-950/80 border border-slate-700/80 text-white placeholder:text-slate-500 font-medium text-sm focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all text-right"
               />
               <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
