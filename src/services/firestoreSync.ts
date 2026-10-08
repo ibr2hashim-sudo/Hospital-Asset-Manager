@@ -7,6 +7,8 @@ import {
   onSnapshot,
   getDocs,
   writeBatch,
+  query,
+  where,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -19,7 +21,7 @@ import {
   SurgicalSet,
   SurgicalInstrument,
 } from '../types';
-import { saveImageToDB, getAllImagesFromDB } from './storage';
+import { saveImageToDB, getAllImagesFromDB, getAllImageRecordsFromDB } from './storage';
 
 function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
@@ -737,7 +739,7 @@ export class FirestoreSyncService {
   }
 
   /**
-   * Pushes all local database records to the user's Firestore
+   * Pushes ONLY modified or new records to the user's Firestore
    */
   static async pushAllLocalDataToFirestore(): Promise<{ success: boolean; message: string }> {
     if (this.isSyncing) return { success: false, message: 'المزامنة جارية بالفعل...' };
@@ -762,110 +764,144 @@ export class FirestoreSyncService {
       const sets: SurgicalSet[] = setsStr ? JSON.parse(setsStr) : [];
       const instruments: SurgicalInstrument[] = instStr ? JSON.parse(instStr) : [];
 
-      // 1. Assets in batches of 200
-      for (let i = 0; i < assets.length; i += 200) {
-        const batch = writeBatch(db);
-        const chunk = assets.slice(i, i + 200);
-        chunk.forEach((asset) => {
-          const safeAsset = { ...asset };
-          if (safeAsset.imageUrl && (safeAsset.imageUrl.startsWith('data:') || safeAsset.imageUrl.length > 500)) {
-            safeAsset.imageUrl = `idb://${safeAsset.customId}`;
-          }
-          const ref = doc(db, 'assets', asset.id);
-          batch.set(ref, cleanForFirestore(safeAsset), { merge: true });
-        });
-        await batch.commit();
+      const isModified = (item: { updatedAt?: string; syncedAt?: string }) => {
+        if (!item.syncedAt) return true;
+        if (!item.updatedAt) return false;
+        return new Date(item.updatedAt).getTime() > new Date(item.syncedAt).getTime();
+      };
+
+      // Filter ONLY newly added or modified items
+      const modifiedAssets = assets.filter(isModified);
+      const modifiedTickets = tickets.filter(isModified);
+      const modifiedPeriodic = periodic.filter(isModified);
+      const modifiedAudits = audits.filter(isModified);
+      const modifiedSets = sets.filter(isModified);
+      const modifiedInstruments = instruments.filter(isModified);
+
+      const totalModified =
+        modifiedAssets.length +
+        modifiedTickets.length +
+        modifiedPeriodic.length +
+        modifiedAudits.length +
+        modifiedSets.length +
+        modifiedInstruments.length;
+
+      // If nothing was modified, return immediately without redundant network writes!
+      if (totalModified === 0) {
+        return {
+          success: true,
+          message: `كافة البيانات متطابقة ومحدثة مع السحابة (تم فحص ${assets.length} أصل و ${tickets.length} بلاغ صيانة، ولا توجد أي إضافات أو تعديلات جديدة للرفع).`,
+        };
       }
 
-      // 2. Tickets
-      for (let i = 0; i < tickets.length; i += 200) {
-        const batch = writeBatch(db);
-        const chunk = tickets.slice(i, i + 200);
-        chunk.forEach((ticket) => {
-          const ref = doc(db, 'tickets', ticket.id);
-          batch.set(ref, cleanForFirestore(ticket), { merge: true });
-        });
-        await batch.commit();
-      }
+      const now = new Date().toISOString();
 
-      // 3. Periodic records
-      for (let i = 0; i < periodic.length; i += 200) {
-        const batch = writeBatch(db);
-        const chunk = periodic.slice(i, i + 200);
-        chunk.forEach((p) => {
-          const ref = doc(db, 'periodic_records', p.id);
-          batch.set(ref, cleanForFirestore(p), { merge: true });
-        });
-        await batch.commit();
-      }
-
-      // 4. Audits
-      for (let i = 0; i < audits.length; i += 200) {
-        const batch = writeBatch(db);
-        const chunk = audits.slice(i, i + 200);
-        chunk.forEach((a) => {
-          const ref = doc(db, 'audit_sessions', a.id);
-          batch.set(ref, cleanForFirestore(a), { merge: true });
-        });
-        await batch.commit();
-      }
-
-      // 5. Users
-      if (users.length > 0) {
-        const batch = writeBatch(db);
-        users.forEach((u) => {
-          const ref = doc(db, 'users', u.id);
-          batch.set(ref, cleanForFirestore(u), { merge: true });
-        });
-        await batch.commit();
-      }
-
-      // 6. Categories
-      if (categories.length > 0) {
-        await setDoc(doc(db, 'settings', 'categories'), {
-          list: categories,
-          updatedAt: new Date().toISOString(),
-        });
-      }
-
-      // 7. Surgical sets
-      if (sets.length > 0) {
-        for (let i = 0; i < sets.length; i += 200) {
+      // 1. Modified Assets
+      if (modifiedAssets.length > 0) {
+        for (let i = 0; i < modifiedAssets.length; i += 200) {
           const batch = writeBatch(db);
-          const chunk = sets.slice(i, i + 200);
+          const chunk = modifiedAssets.slice(i, i + 200);
+          chunk.forEach((asset) => {
+            asset.syncedAt = now;
+            const safeAsset = { ...asset };
+            if (safeAsset.imageUrl && (safeAsset.imageUrl.startsWith('data:') || safeAsset.imageUrl.length > 500)) {
+              safeAsset.imageUrl = `idb://${safeAsset.customId}`;
+            }
+            const ref = doc(db, 'assets', asset.id);
+            batch.set(ref, cleanForFirestore(safeAsset), { merge: true });
+          });
+          await batch.commit();
+        }
+        localStorage.setItem('asset_mgmt_assets', JSON.stringify(assets));
+      }
+
+      // 2. Modified Tickets
+      if (modifiedTickets.length > 0) {
+        for (let i = 0; i < modifiedTickets.length; i += 200) {
+          const batch = writeBatch(db);
+          const chunk = modifiedTickets.slice(i, i + 200);
+          chunk.forEach((ticket) => {
+            ticket.syncedAt = now;
+            const ref = doc(db, 'tickets', ticket.id);
+            batch.set(ref, cleanForFirestore(ticket), { merge: true });
+          });
+          await batch.commit();
+        }
+        localStorage.setItem('asset_mgmt_tickets', JSON.stringify(tickets));
+      }
+
+      // 3. Modified Periodic
+      if (modifiedPeriodic.length > 0) {
+        for (let i = 0; i < modifiedPeriodic.length; i += 200) {
+          const batch = writeBatch(db);
+          const chunk = modifiedPeriodic.slice(i, i + 200);
+          chunk.forEach((p) => {
+            p.syncedAt = now;
+            const ref = doc(db, 'periodic_records', p.id);
+            batch.set(ref, cleanForFirestore(p), { merge: true });
+          });
+          await batch.commit();
+        }
+        localStorage.setItem('asset_mgmt_periodic', JSON.stringify(periodic));
+      }
+
+      // 4. Modified Audits
+      if (modifiedAudits.length > 0) {
+        for (let i = 0; i < modifiedAudits.length; i += 200) {
+          const batch = writeBatch(db);
+          const chunk = modifiedAudits.slice(i, i + 200);
+          chunk.forEach((a) => {
+            a.syncedAt = now;
+            const ref = doc(db, 'audit_sessions', a.id);
+            batch.set(ref, cleanForFirestore(a), { merge: true });
+          });
+          await batch.commit();
+        }
+        localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(audits));
+      }
+
+      // 5. Modified Sets
+      if (modifiedSets.length > 0) {
+        for (let i = 0; i < modifiedSets.length; i += 200) {
+          const batch = writeBatch(db);
+          const chunk = modifiedSets.slice(i, i + 200);
           chunk.forEach((s) => {
+            s.syncedAt = now;
             const ref = doc(db, 'surgical_sets', s.id);
             batch.set(ref, cleanForFirestore(s), { merge: true });
           });
           await batch.commit();
         }
+        localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(sets));
       }
 
-      // 8. Surgical instruments
-      if (instruments.length > 0) {
-        for (let i = 0; i < instruments.length; i += 200) {
+      // 6. Modified Instruments
+      if (modifiedInstruments.length > 0) {
+        for (let i = 0; i < modifiedInstruments.length; i += 200) {
           const batch = writeBatch(db);
-          const chunk = instruments.slice(i, i + 200);
+          const chunk = modifiedInstruments.slice(i, i + 200);
           chunk.forEach((inst) => {
+            inst.syncedAt = now;
             const ref = doc(db, 'surgical_instruments', inst.id);
             batch.set(ref, cleanForFirestore(inst), { merge: true });
           });
           await batch.commit();
         }
+        localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(instruments));
       }
 
-      // Update sync_meta
+      // Update sync_meta pulse
       await setDoc(
         doc(db, 'settings', 'sync_meta'),
         {
           version: Date.now(),
-          lastUpdated: new Date().toISOString(),
+          lastUpdated: now,
           assetsCount: assets.length,
           ticketsCount: tickets.length,
           recentChanges: [
             {
               col: 'assets',
-              id: 'full_push',
+              id: 'incremental_push',
               action: 'set',
               timestamp: Date.now(),
             },
@@ -880,7 +916,7 @@ export class FirestoreSyncService {
 
       return {
         success: true,
-        message: `تم رفع كافة البيانات بنجاح إلى قاعدة بياناتك السحابية (${assets.length} أصل، ${tickets.length} بلاغ صيانة).`,
+        message: `تم فحص كافة السجلات بنجاح، ورفع (${modifiedAssets.length} أصل، ${modifiedTickets.length} بلاغ صيانة، ${totalModified} تعديل إجمالي) تم إضافتها أو تعديلها حديثاً فقط.`,
       };
     } catch (err: any) {
       this.handleSyncError('pushAllLocalData', err);
@@ -891,63 +927,119 @@ export class FirestoreSyncService {
   }
 
   /**
-   * Pulls all collections from Firestore into local storage
+   * Pulls ONLY updated or new collections from Firestore into local storage
    */
   static async pullAllCloudDataToLocal(): Promise<{ success: boolean; message: string }> {
     try {
-      console.log('[Firestore]: Downloading cloud data...');
+      console.log('[Firestore]: Checking for cloud updates...');
       const pullNow = new Date().toISOString();
+      const lastPullIso = localStorage.getItem('last_cloud_pull_iso');
+
+      let updatedCount = 0;
 
       // 1. Assets
-      const assetsSnap = await getDocs(collection(db, 'assets'));
+      const assetsRef = collection(db, 'assets');
+      const assetsSnap = lastPullIso
+        ? await getDocs(query(assetsRef, where('updatedAt', '>', lastPullIso)))
+        : await getDocs(assetsRef);
+
+      const assetsStr = localStorage.getItem('asset_mgmt_assets');
+      const localAssets: Asset[] = assetsStr ? JSON.parse(assetsStr) : [];
+
       if (!assetsSnap.empty) {
-        const remoteAssets: Asset[] = [];
         assetsSnap.forEach((d) => {
-          const item = d.data() as Asset;
-          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
-          remoteAssets.push(item);
+          const remote = d.data() as Asset;
+          if (!remote.syncedAt) remote.syncedAt = remote.updatedAt || pullNow;
+          const idx = localAssets.findIndex((a) => a.id === remote.id || a.customId === remote.customId);
+          if (idx !== -1) {
+            localAssets[idx] = remote;
+          } else {
+            localAssets.unshift(remote);
+          }
+          updatedCount++;
         });
-        localStorage.setItem('asset_mgmt_assets', JSON.stringify(remoteAssets));
+        localStorage.setItem('asset_mgmt_assets', JSON.stringify(localAssets));
       }
 
       // 2. Tickets
-      const ticketsSnap = await getDocs(collection(db, 'tickets'));
+      const ticketsRef = collection(db, 'tickets');
+      const ticketsSnap = lastPullIso
+        ? await getDocs(query(ticketsRef, where('updatedAt', '>', lastPullIso)))
+        : await getDocs(ticketsRef);
+
+      const ticketsStr = localStorage.getItem('asset_mgmt_tickets');
+      const localTickets: MaintenanceTicket[] = ticketsStr ? JSON.parse(ticketsStr) : [];
+
       if (!ticketsSnap.empty) {
-        const remoteTickets: MaintenanceTicket[] = [];
         ticketsSnap.forEach((d) => {
-          const item = d.data() as MaintenanceTicket;
-          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
-          remoteTickets.push(item);
+          const remote = d.data() as MaintenanceTicket;
+          if (!remote.syncedAt) remote.syncedAt = remote.updatedAt || pullNow;
+          const idx = localTickets.findIndex((t) => t.id === remote.id || t.ticketNumber === remote.ticketNumber);
+          if (idx !== -1) {
+            localTickets[idx] = remote;
+          } else {
+            localTickets.unshift(remote);
+          }
+          updatedCount++;
         });
-        localStorage.setItem('asset_mgmt_tickets', JSON.stringify(remoteTickets));
+        localStorage.setItem('asset_mgmt_tickets', JSON.stringify(localTickets));
       }
 
       // 3. Periodic Records
-      const periodicSnap = await getDocs(collection(db, 'periodic_records'));
+      const periodicRef = collection(db, 'periodic_records');
+      const periodicSnap = lastPullIso
+        ? await getDocs(query(periodicRef, where('updatedAt', '>', lastPullIso)))
+        : await getDocs(periodicRef);
+
+      const periodicStr = localStorage.getItem('asset_mgmt_periodic');
+      const localPeriodic: PeriodicMaintenanceRecord[] = periodicStr ? JSON.parse(periodicStr) : [];
+
       if (!periodicSnap.empty) {
-        const remotePeriodic: PeriodicMaintenanceRecord[] = [];
         periodicSnap.forEach((d) => {
-          const item = d.data() as PeriodicMaintenanceRecord;
-          if (!item.syncedAt) item.syncedAt = item.updatedAt || pullNow;
-          remotePeriodic.push(item);
+          const remote = d.data() as PeriodicMaintenanceRecord;
+          if (!remote.syncedAt) remote.syncedAt = remote.updatedAt || pullNow;
+          const idx = localPeriodic.findIndex((p) => p.id === remote.id);
+          if (idx !== -1) {
+            localPeriodic[idx] = remote;
+          } else {
+            localPeriodic.unshift(remote);
+          }
+          updatedCount++;
         });
-        localStorage.setItem('asset_mgmt_periodic', JSON.stringify(remotePeriodic));
+        localStorage.setItem('asset_mgmt_periodic', JSON.stringify(localPeriodic));
       }
 
       // 4. Audits
-      const auditsSnap = await getDocs(collection(db, 'audit_sessions'));
+      const auditsRef = collection(db, 'audit_sessions');
+      const auditsSnap = lastPullIso
+        ? await getDocs(query(auditsRef, where('updatedAt', '>', lastPullIso)))
+        : await getDocs(auditsRef);
+
+      const auditsStr = localStorage.getItem('asset_mgmt_audit_sessions');
+      const localAudits: AuditSession[] = auditsStr ? JSON.parse(auditsStr) : [];
+
       if (!auditsSnap.empty) {
-        const remoteAudits: AuditSession[] = [];
-        auditsSnap.forEach((d) => remoteAudits.push(d.data() as AuditSession));
-        localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(remoteAudits));
+        auditsSnap.forEach((d) => {
+          const remote = d.data() as AuditSession;
+          const idx = localAudits.findIndex((a) => a.id === remote.id || a.sessionNumber === remote.sessionNumber);
+          if (idx !== -1) {
+            localAudits[idx] = remote;
+          } else {
+            localAudits.unshift(remote);
+          }
+          updatedCount++;
+        });
+        localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(localAudits));
       }
 
-      // 5. Users
-      const usersSnap = await getDocs(collection(db, 'users'));
-      if (!usersSnap.empty) {
-        const remoteUsers: User[] = [];
-        usersSnap.forEach((d) => remoteUsers.push(d.data() as User));
-        localStorage.setItem('asset_mgmt_users', JSON.stringify(remoteUsers));
+      // 5. Users (first time load only)
+      if (!lastPullIso) {
+        const usersSnap = await getDocs(collection(db, 'users'));
+        if (!usersSnap.empty) {
+          const remoteUsers: User[] = [];
+          usersSnap.forEach((d) => remoteUsers.push(d.data() as User));
+          localStorage.setItem('asset_mgmt_users', JSON.stringify(remoteUsers));
+        }
       }
 
       // 6. Categories
@@ -960,21 +1052,46 @@ export class FirestoreSyncService {
       }
 
       // 7. Surgical sets
-      const setsSnap = await getDocs(collection(db, 'surgical_sets'));
+      const setsRef = collection(db, 'surgical_sets');
+      const setsSnap = lastPullIso
+        ? await getDocs(query(setsRef, where('updatedAt', '>', lastPullIso)))
+        : await getDocs(setsRef);
+
+      const setsStr = localStorage.getItem('asset_mgmt_surgical_sets');
+      const localSets: SurgicalSet[] = setsStr ? JSON.parse(setsStr) : [];
+
       if (!setsSnap.empty) {
-        const remoteSets: SurgicalSet[] = [];
-        setsSnap.forEach((d) => remoteSets.push(d.data() as SurgicalSet));
-        localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(remoteSets));
+        setsSnap.forEach((d) => {
+          const remote = d.data() as SurgicalSet;
+          const idx = localSets.findIndex((s) => s.id === remote.id);
+          if (idx !== -1) localSets[idx] = remote;
+          else localSets.unshift(remote);
+          updatedCount++;
+        });
+        localStorage.setItem('asset_mgmt_surgical_sets', JSON.stringify(localSets));
       }
 
       // 8. Surgical instruments
-      const instSnap = await getDocs(collection(db, 'surgical_instruments'));
+      const instRef = collection(db, 'surgical_instruments');
+      const instSnap = lastPullIso
+        ? await getDocs(query(instRef, where('updatedAt', '>', lastPullIso)))
+        : await getDocs(instRef);
+
+      const instStr = localStorage.getItem('asset_mgmt_surgical_instruments');
+      const localInsts: SurgicalInstrument[] = instStr ? JSON.parse(instStr) : [];
+
       if (!instSnap.empty) {
-        const remoteInsts: SurgicalInstrument[] = [];
-        instSnap.forEach((d) => remoteInsts.push(d.data() as SurgicalInstrument));
-        localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(remoteInsts));
+        instSnap.forEach((d) => {
+          const remote = d.data() as SurgicalInstrument;
+          const idx = localInsts.findIndex((i) => i.id === remote.id);
+          if (idx !== -1) localInsts[idx] = remote;
+          else localInsts.unshift(remote);
+          updatedCount++;
+        });
+        localStorage.setItem('asset_mgmt_surgical_instruments', JSON.stringify(localInsts));
       }
 
+      localStorage.setItem('last_cloud_pull_iso', pullNow);
       localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(Date.now()));
       localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
 
@@ -986,9 +1103,16 @@ export class FirestoreSyncService {
       this.quotaExceeded = false;
       this.notifyStatusChange();
 
+      if (updatedCount === 0 && lastPullIso) {
+        return {
+          success: true,
+          message: 'كافة البيانات على جهازك متطابقة ومحدثة بالكامل مع السحابة، لا توجد أي إضافات أو تعديلات جديدة.',
+        };
+      }
+
       return {
         success: true,
-        message: 'تم تحميل وتحديث كافة البيانات من قاعدة بياناتك السحابية بنجاح.',
+        message: `تم جلب وتحديث (${updatedCount || localAssets.length} سجل جديد أو معدل) من السحابة بنجاح.`,
       };
     } catch (err: any) {
       this.handleSyncError('pullAllCloudData', err);
@@ -997,48 +1121,72 @@ export class FirestoreSyncService {
   }
 
   /**
-   * Upload all local images from IndexedDB to the private Firestore cloud
+   * Upload ONLY modified or newly added local images from IndexedDB to the private Firestore cloud
    */
   static async uploadAllImagesToCloud(
     onProgress?: (current: number, total: number, currentKey: string) => void
   ): Promise<{ success: boolean; message: string; count: number }> {
     try {
-      const imagesMap = await getAllImagesFromDB();
-      const entries = Array.from(imagesMap.entries());
-      const total = entries.length;
+      const allImages = await getAllImageRecordsFromDB();
+      const totalLocal = allImages.length;
 
-      if (total === 0) {
+      if (totalLocal === 0) {
         return {
           success: true,
-          message: 'لا توجد صور مخزنة محلياً على هذا الجهاز لرفعها.',
+          message: 'لا توجد أي صور مخزنة محلياً على هذا الجهاز لرفعها.',
+          count: 0,
+        };
+      }
+
+      // Check last synced image metadata (timestamps)
+      const syncedMeta: Record<string, number> = JSON.parse(
+        localStorage.getItem('asset_synced_images_timestamps') || '{}'
+      );
+
+      // Filter ONLY images that are new or whose updatedAt is newer than syncedMeta
+      const imagesToUpload = allImages.filter((img) => {
+        const cleanKey = img.customId.trim().toLowerCase();
+        const lastSyncedTs = syncedMeta[cleanKey] || 0;
+        const imgUpdatedTs = img.updatedAt || 0;
+        return !syncedMeta[cleanKey] || (imgUpdatedTs > 0 && imgUpdatedTs > lastSyncedTs);
+      });
+
+      if (imagesToUpload.length === 0) {
+        return {
+          success: true,
+          message: `كافة الصور (${totalLocal} صورة) مرفوعة بالفعل ومحدثة على السحابة، لا توجد أي صور جديدة أو معدلة للرفع.`,
           count: 0,
         };
       }
 
       let uploaded = 0;
-      for (let i = 0; i < total; i++) {
-        const [rawKey, dataUrl] = entries[i];
-        const cleanKey = rawKey.trim().toLowerCase();
+      for (let i = 0; i < imagesToUpload.length; i++) {
+        const img = imagesToUpload[i];
+        const cleanKey = img.customId.trim().toLowerCase();
 
         if (onProgress) {
-          onProgress(i + 1, total, rawKey);
+          onProgress(i + 1, imagesToUpload.length, img.customId);
         }
 
         const docRef = doc(db, 'asset_cloud_images', cleanKey);
         await setDoc(
           docRef,
           {
-            customId: rawKey,
+            customId: img.customId,
             cleanKey,
-            dataUrl,
+            dataUrl: img.dataUrl,
             updatedAt: new Date().toISOString(),
           },
           { merge: true }
         );
+
+        syncedMeta[cleanKey] = img.updatedAt || Date.now();
         uploaded++;
       }
 
-      // Mark local assets as hasCloudImage = true
+      localStorage.setItem('asset_synced_images_timestamps', JSON.stringify(syncedMeta));
+
+      // Mark corresponding local assets as hasCloudImage = true
       try {
         const assetsStr = localStorage.getItem('asset_mgmt_assets');
         if (assetsStr) {
@@ -1046,7 +1194,7 @@ export class FirestoreSyncService {
           let modified = false;
           assets.forEach((a) => {
             const k = a.customId.trim().toLowerCase();
-            if (imagesMap.has(k) || imagesMap.has(a.customId.trim())) {
+            if (syncedMeta[k]) {
               a.hasCloudImage = true;
               modified = true;
             }
@@ -1059,7 +1207,7 @@ export class FirestoreSyncService {
 
       return {
         success: true,
-        message: `تم رفع كافة الصور بنجاح إلى السحابة (${uploaded} صورة).`,
+        message: `تم فحص ${totalLocal} صورة، ورفع (${uploaded} صورة جديدة أو معدلة فقط) بنجاح إلى السحابة.`,
         count: uploaded,
       };
     } catch (err: any) {

@@ -234,6 +234,41 @@ export async function getAllImagesFromDB(): Promise<Map<string, string>> {
   }
 }
 
+export interface ImageRecord {
+  customId: string;
+  dataUrl: string;
+  updatedAt?: number;
+}
+
+export async function getAllImageRecordsFromDB(): Promise<ImageRecord[]> {
+  const records: ImageRecord[] = [];
+  try {
+    const db = await openImageDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        if (Array.isArray(req.result)) {
+          req.result.forEach((item) => {
+            if (item.customId && item.dataUrl) {
+              records.push({
+                customId: item.customId,
+                dataUrl: item.dataUrl,
+                updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.now(),
+              });
+            }
+          });
+        }
+        resolve(records);
+      };
+      req.onerror = () => resolve(records);
+    });
+  } catch {
+    return records;
+  }
+}
+
 function setItem<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
