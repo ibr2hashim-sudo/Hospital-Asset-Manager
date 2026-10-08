@@ -149,6 +149,17 @@ export const AssetImage: React.FC<AssetImageProps> = ({
           }
         }
 
+        // 4. On-demand Cloud Fetch if not present locally
+        if (customId) {
+          const cloudData = await FirestoreSyncService.fetchImageFromCloud(customId);
+          if (cloudData && isMounted) {
+            setResolvedSrc(cloudData);
+            setMemoryImageCache(customId, cloudData);
+            setIsLoading(false);
+            return;
+          }
+        }
+
         if (isMounted) {
           setResolvedSrc(null);
           setIsLoading(false);

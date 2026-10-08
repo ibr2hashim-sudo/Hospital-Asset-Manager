@@ -26,7 +26,7 @@ import {
   FolderArchive,
 } from 'lucide-react';
 import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
-import { StorageService } from '../services/storage';
+import { StorageService, getImageFromDB } from '../services/storage';
 import { ExcelUtils } from '../utils/excelImportExport';
 import { AssetImage } from './AssetImage';
 import { BarcodeCameraScanner } from './BarcodeCameraScanner';
@@ -1848,6 +1848,28 @@ interface AssetDetailModalProps {
 }
 
 const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onOpenTicket }) => {
+  const handleSaveImageToFile = async () => {
+    let dataUrl = await getImageFromDB(asset.customId);
+    if (!dataUrl && asset.customId) {
+      dataUrl = await FirestoreSyncService.fetchImageFromCloud(asset.customId);
+    }
+    if (!dataUrl && asset.imageUrl && !asset.imageUrl.startsWith('idb://')) {
+      dataUrl = asset.imageUrl;
+    }
+
+    if (!dataUrl) {
+      alert('لا توجد صورة متوفرة لهذا الجهاز لتنزيلها.');
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = `${asset.customId || 'device-image'}.jpg`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
       <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl my-8 space-y-5 text-right">
@@ -1871,18 +1893,34 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
           </button>
         </div>
 
-        {/* Image Display */}
-        <div className="h-60 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
-          <AssetImage
-            src={asset.imageUrl}
-            hasCloudImage={asset.hasCloudImage}
-            customId={asset.customId}
-            serialNumber={asset.serialNumber}
-            deviceName={asset.deviceName}
-            alt={asset.deviceName}
-            className="w-full h-full object-contain"
-            containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
-          />
+        {/* Image Display & Save Button */}
+        <div className="space-y-2">
+          <div className="h-60 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
+            <AssetImage
+              src={asset.imageUrl}
+              hasCloudImage={asset.hasCloudImage}
+              customId={asset.customId}
+              serialNumber={asset.serialNumber}
+              deviceName={asset.deviceName}
+              alt={asset.deviceName}
+              className="w-full h-full object-contain"
+              containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
+            />
+          </div>
+          <div className="flex items-center justify-between px-1">
+            <button
+              type="button"
+              onClick={handleSaveImageToFile}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors border border-slate-200 shadow-2xs cursor-pointer"
+              title={`حفظ وتنزيل الصورة باسم ${asset.customId}`}
+            >
+              <Download className="w-3.5 h-3.5 text-blue-600" />
+              <span>حفظ وتنزيل الصورة باسم ({asset.customId})</span>
+            </button>
+            <span className="text-[11px] text-slate-400">
+              يتم جلب الصورة تلقائياً من السحابة وحفظها محلياً
+            </span>
+          </div>
         </div>
 
         {/* 15 Attributes Grid */}

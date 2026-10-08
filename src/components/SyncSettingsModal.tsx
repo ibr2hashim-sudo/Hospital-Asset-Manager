@@ -11,6 +11,7 @@ import {
   FileJson,
   RefreshCw,
   Cloud,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { StorageService } from '../services/storage';
@@ -34,6 +35,8 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   // Cloud sync states
   const [isPushingCloud, setIsPushingCloud] = useState(false);
   const [isPullingCloud, setIsPullingCloud] = useState(false);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [imageProgress, setImageProgress] = useState<{ current: number; total: number; key: string } | null>(null);
 
   // Backup states
   const [isExportingBackup, setIsExportingBackup] = useState(false);
@@ -44,10 +47,10 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   const excelComprehensiveInputRef = useRef<HTMLInputElement>(null);
   const fullBackupInputRef = useRef<HTMLInputElement>(null);
 
-  // 1. Push all local data to User's Firebase
-  const handlePushToCloud = async () => {
+  // 1. Push all local DATA only to User's Firebase (Blue Button)
+  const handlePushDataOnlyToCloud = async () => {
     setIsPushingCloud(true);
-    setStatusMsg({ text: 'جاري رفع ومزامنة كافة السجلات إلى قاعدة بياناتك في Firebase...', type: 'info' });
+    setStatusMsg({ text: 'جاري رفع ومزامنة البيانات النصية فقط إلى قاعدة بياناتك السحابية...', type: 'info' });
     try {
       const res = await FirestoreSyncService.pushAllLocalDataToFirestore();
       setStatusMsg({
@@ -59,7 +62,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
       }
     } catch (err: any) {
       setStatusMsg({
-        text: `فشل الرفع السحابي: ${err?.message || 'خطأ غير متوقع'}`,
+        text: `فشل رفع البيانات: ${err?.message || 'خطأ غير متوقع'}`,
         type: 'error',
       });
     } finally {
@@ -67,10 +70,10 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 2. Pull all cloud data from User's Firebase
-  const handlePullFromCloud = async () => {
+  // 2. Pull all cloud DATA only from User's Firebase (Green Button)
+  const handlePullDataOnlyFromCloud = async () => {
     setIsPullingCloud(true);
-    setStatusMsg({ text: 'جاري تنزيل وتحديث كافة البيانات من سحابتك إلى هذا الجهاز...', type: 'info' });
+    setStatusMsg({ text: 'جاري تنزيل وتحديث كافة البيانات النصية بسرعة فائقة من سحابتك...', type: 'info' });
     try {
       const res = await FirestoreSyncService.pullAllCloudDataToLocal();
       setStatusMsg({
@@ -82,7 +85,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
       }
     } catch (err: any) {
       setStatusMsg({
-        text: `فشل الجلب السحابي: ${err?.message || 'خطأ غير متوقع'}`,
+        text: `فشل جلب البيانات: ${err?.message || 'خطأ غير متوقع'}`,
         type: 'error',
       });
     } finally {
@@ -90,7 +93,34 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 3. Export Complete Backup (Data + Images)
+  // 3. Upload IMAGES only to Cloud (Orange Button)
+  const handleUploadImagesOnly = async () => {
+    setIsUploadingImages(true);
+    setImageProgress(null);
+    setStatusMsg({ text: 'جاري فحص ورفع كافة صور الأجهزة من الذاكرة المحلية إلى السحابة...', type: 'info' });
+    try {
+      const res = await FirestoreSyncService.uploadAllImagesToCloud((current, total, key) => {
+        setImageProgress({ current, total, key });
+      });
+      setStatusMsg({
+        text: res.message,
+        type: res.success ? 'success' : 'error',
+      });
+      if (res.success) {
+        onRefresh();
+      }
+    } catch (err: any) {
+      setStatusMsg({
+        text: `فشل رفع الصور: ${err?.message || 'خطأ غير متوقع'}`,
+        type: 'error',
+      });
+    } finally {
+      setIsUploadingImages(false);
+      setImageProgress(null);
+    }
+  };
+
+  // 4. Export Complete Backup (Data + Images JSON)
   const handleExportFullBackup = async () => {
     setIsExportingBackup(true);
     setStatusMsg({ text: 'جاري جمع وضغط كافة البيانات وسجلات الأصول وجميع الصور من ذاكرة المتصفح...', type: 'info' });
@@ -121,7 +151,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 4. Import Complete Backup (Data + Images)
+  // 5. Import Complete Backup (Data + Images JSON)
   const handleImportFullBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -157,7 +187,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 5. Export Comprehensive Excel
+  // 6. Export Comprehensive Excel
   const handleExportComprehensiveExcel = () => {
     try {
       const users = StorageService.getUsers();
@@ -190,7 +220,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 6. Import Comprehensive Excel
+  // 7. Import Comprehensive Excel
   const handleImportComprehensiveExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -258,7 +288,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors"
+            className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -286,8 +316,29 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
           </div>
         )}
 
-        {/* Section 1: User's Private Firebase Cloud */}
-        <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50/80 via-indigo-50/40 to-slate-50 border border-blue-100/90 space-y-3.5">
+        {/* Upload Progress for Images */}
+        {isUploadingImages && imageProgress && (
+          <div className="p-3 bg-orange-50 border border-orange-200 rounded-2xl space-y-1.5 text-xs text-orange-950 font-bold">
+            <div className="flex items-center justify-between text-[11px]">
+              <span>جاري رفع الصور للسحابة:</span>
+              <span className="font-mono text-orange-700">
+                {imageProgress.current} من {imageProgress.total} ({Math.round((imageProgress.current / imageProgress.total) * 100)}%)
+              </span>
+            </div>
+            <div className="w-full bg-orange-200 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-orange-600 h-full transition-all duration-200"
+                style={{ width: `${Math.round((imageProgress.current / imageProgress.total) * 100)}%` }}
+              />
+            </div>
+            <div className="text-[10px] text-orange-600 truncate font-mono">
+              الصورة الحالية: {imageProgress.key}
+            </div>
+          </div>
+        )}
+
+        {/* Section 1: User's Private Firebase Cloud (3 Specific Buttons) */}
+        <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50/80 via-slate-50 to-indigo-50/40 border border-blue-100/90 space-y-3.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
@@ -295,39 +346,60 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               </div>
               <div>
                 <h4 className="font-bold text-slate-900 text-sm">
-                  قاعدة بياناتك السحابية الخاصة (Firebase Firestore)
+                  المزامنة السحابية الذكية (Firebase Firestore)
                 </h4>
-                <p className="text-[11px] text-slate-500 font-mono">
-                  {projectId}
+                <p className="text-[11px] text-slate-500">
+                  فصل رفع وتحديث البيانات النصية عن الصور لتسريع الأداء وتوفير الإنترنت
                 </p>
               </div>
             </div>
           </div>
 
+          {/* 3 Buttons Grid: Blue, Green, Orange */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+            {/* 1. Blue Button: رفع ومزامنة البيانات */}
             <button
               type="button"
-              onClick={handlePushToCloud}
-              disabled={isPushingCloud || isPullingCloud}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
+              onClick={handlePushDataOnlyToCloud}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
+              title="رفع ومزامنة كافة السجلات النصية فقط بدون الصور"
             >
               <RefreshCw className={`w-4 h-4 ${isPushingCloud ? 'animate-spin' : ''}`} />
-              <span>{isPushingCloud ? 'جاري الرفع...' : 'رفع ومزامنة البيانات لسحابتي'}</span>
+              <span>{isPushingCloud ? 'جاري الرفع...' : 'رفع ومزامنة البيانات'}</span>
             </button>
 
+            {/* 2. Green Button: جلب وتحديث البيانات */}
             <button
               type="button"
-              onClick={handlePullFromCloud}
-              disabled={isPushingCloud || isPullingCloud}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
+              onClick={handlePullDataOnlyFromCloud}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
+              title="جلب وتحديث كافة السجلات النصية من السحابة بدون الصور بسرعة فائقة"
             >
               <Download className={`w-4 h-4 ${isPullingCloud ? 'animate-spin' : ''}`} />
-              <span>{isPullingCloud ? 'جاري التنزيل...' : 'جلب وتحديث البيانات من سحابتي'}</span>
+              <span>{isPullingCloud ? 'جاري التنزيل...' : 'جلب وتحديث البيانات'}</span>
             </button>
+
+            {/* 3. Orange Button: رفع الصور (full width or distinct) */}
+            <button
+              type="button"
+              onClick={handleUploadImagesOnly}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages}
+              className="sm:col-span-2 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
+              title="رفع كافة صور الأجهزة المحفوظة محلياً إلى السحابة"
+            >
+              <ImageIcon className={`w-4 h-4 ${isUploadingImages ? 'animate-pulse' : ''}`} />
+              <span>{isUploadingImages ? 'جاري رفع الصور...' : 'رفع الصور'}</span>
+            </button>
+          </div>
+
+          <div className="text-[11px] text-slate-500 bg-white/80 p-2.5 rounded-xl border border-slate-200/80 leading-relaxed">
+            💡 <strong>ملاحظة ذكية:</strong> يتم جلب صور الأجهزة تلقائياً من السحابة عند الدخول لبطاقة كل جهاز وحفظها محلياً بنفس معرّف الـ (ID) لتوفير البيانات.
           </div>
         </div>
 
-        {/* Section 2: Complete System Backup (Data + High-Res Images) */}
+        {/* Section 2: Complete System Backup (Data + High-Res Images JSON) */}
         <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/70 via-blue-50/40 to-slate-50 border border-indigo-100/80 space-y-3.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -339,7 +411,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
                   النسخة الاحتياطية الشاملة (البيانات + الصور)
                 </h4>
                 <p className="text-[11px] text-slate-500">
-                  تصدير حزمة كاملة بصيغة JSON تحتوي على جميع الأجهزة، الصيانة، والمستخدمين مع جميع الصور.
+                  تصدير حزمة كاملة بصيغة JSON تحتوي على جميع الأجهزة، الصيانة، والمستخدمين مع جميع الصور بدقة كاملة.
                 </p>
               </div>
             </div>
@@ -350,7 +422,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               type="button"
               onClick={handleExportFullBackup}
               disabled={isExportingBackup || isImportingBackup}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer"
             >
               <Download className={`w-4 h-4 ${isExportingBackup ? 'animate-spin' : ''}`} />
               <span>{isExportingBackup ? 'جاري التصدير...' : 'تصدير نسخة كاملة (JSON)'}</span>
@@ -399,7 +471,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               <button
                 type="button"
                 onClick={handleExportComprehensiveExcel}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs text-xs"
+                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs text-xs cursor-pointer"
               >
                 <Download className="w-4 h-4" />
                 <span>تصدير ملف Excel الشامل</span>
@@ -424,7 +496,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
         <div className="pt-2 border-t border-slate-100 flex justify-end">
           <button
             onClick={onClose}
-            className="px-5 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold hover:bg-slate-200 text-xs transition-colors"
+            className="px-5 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold hover:bg-slate-200 text-xs transition-colors cursor-pointer"
           >
             إغلاق
           </button>

@@ -19,7 +19,7 @@ import {
   SurgicalSet,
   SurgicalInstrument,
 } from '../types';
-import { saveImageToDB } from './storage';
+import { saveImageToDB, getAllImagesFromDB } from './storage';
 
 function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
@@ -993,6 +993,107 @@ export class FirestoreSyncService {
     } catch (err: any) {
       this.handleSyncError('pullAllCloudData', err);
       return { success: false, message: `فشل التحميل السحابي: ${err?.message || 'خطأ'}` };
+    }
+  }
+
+  /**
+   * Upload all local images from IndexedDB to the private Firestore cloud
+   */
+  static async uploadAllImagesToCloud(
+    onProgress?: (current: number, total: number, currentKey: string) => void
+  ): Promise<{ success: boolean; message: string; count: number }> {
+    try {
+      const imagesMap = await getAllImagesFromDB();
+      const entries = Array.from(imagesMap.entries());
+      const total = entries.length;
+
+      if (total === 0) {
+        return {
+          success: true,
+          message: 'لا توجد صور مخزنة محلياً على هذا الجهاز لرفعها.',
+          count: 0,
+        };
+      }
+
+      let uploaded = 0;
+      for (let i = 0; i < total; i++) {
+        const [rawKey, dataUrl] = entries[i];
+        const cleanKey = rawKey.trim().toLowerCase();
+
+        if (onProgress) {
+          onProgress(i + 1, total, rawKey);
+        }
+
+        const docRef = doc(db, 'asset_cloud_images', cleanKey);
+        await setDoc(
+          docRef,
+          {
+            customId: rawKey,
+            cleanKey,
+            dataUrl,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+        uploaded++;
+      }
+
+      // Mark local assets as hasCloudImage = true
+      try {
+        const assetsStr = localStorage.getItem('asset_mgmt_assets');
+        if (assetsStr) {
+          const assets: Asset[] = JSON.parse(assetsStr);
+          let modified = false;
+          assets.forEach((a) => {
+            const k = a.customId.trim().toLowerCase();
+            if (imagesMap.has(k) || imagesMap.has(a.customId.trim())) {
+              a.hasCloudImage = true;
+              modified = true;
+            }
+          });
+          if (modified) {
+            localStorage.setItem('asset_mgmt_assets', JSON.stringify(assets));
+          }
+        }
+      } catch {}
+
+      return {
+        success: true,
+        message: `تم رفع كافة الصور بنجاح إلى السحابة (${uploaded} صورة).`,
+        count: uploaded,
+      };
+    } catch (err: any) {
+      this.handleSyncError('uploadAllImagesToCloud', err);
+      return {
+        success: false,
+        message: `فشل رفع الصور: ${err?.message || 'خطأ غير متوقع'}`,
+        count: 0,
+      };
+    }
+  }
+
+  /**
+   * Fetches an image for a specific asset from cloud on-demand
+   */
+  static async fetchImageFromCloud(customId: string): Promise<string | null> {
+    if (!customId) return null;
+    try {
+      const cleanKey = customId.trim().toLowerCase();
+      const docRef = doc(db, 'asset_cloud_images', cleanKey);
+      const snap = await getDoc(docRef);
+
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data?.dataUrl) {
+          // Cache in local IndexedDB so next time it is instant & offline
+          await saveImageToDB(customId, data.dataUrl);
+          return data.dataUrl;
+        }
+      }
+      return null;
+    } catch (err) {
+      console.warn(`[Firestore]: Failed to fetch image for ${customId} from cloud:`, err);
+      return null;
     }
   }
 
