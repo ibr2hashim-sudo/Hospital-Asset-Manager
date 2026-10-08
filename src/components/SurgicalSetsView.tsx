@@ -29,6 +29,8 @@ import {
   PackageCheck,
   FileDown,
   BarChart3,
+  LayoutGrid,
+  List,
 } from 'lucide-react';
 import {
   SurgicalSet,
@@ -118,7 +120,7 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   // Instrument search & view mode in Active Set
   const [instSearchTerm, setInstSearchTerm] = useState('');
   const [instStatusFilter, setInstStatusFilter] = useState('all');
-  const [instViewMode, setInstViewMode] = useState<'table' | 'cards'>('table');
+  const [instViewMode, setInstViewMode] = useState<'table' | 'cards'>('cards');
 
   // Load data
   const loadData = () => {
@@ -1205,20 +1207,26 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
             {/* View Mode Toggle */}
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
               <button
-                onClick={() => setInstViewMode('table')}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                  instViewMode === 'table' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                عرض جدول
-              </button>
-              <button
+                type="button"
                 onClick={() => setInstViewMode('cards')}
-                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   instViewMode === 'cards' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                 }`}
+                title="عرض الأدوات الجراحية كصور وكروت مرئية"
               >
-                عرض صور وكروت
+                <LayoutGrid className="w-3.5 h-3.5 text-blue-600" />
+                <span>عرض صور وكروت</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setInstViewMode('table')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  instViewMode === 'table' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="عرض الأدوات الجراحية كجدول بيانات تفصيلي"
+              >
+                <List className="w-3.5 h-3.5 text-slate-600" />
+                <span>عرض جدول</span>
               </button>
             </div>
           </div>

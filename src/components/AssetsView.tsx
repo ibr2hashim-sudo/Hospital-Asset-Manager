@@ -24,6 +24,8 @@ import {
   Wrench,
   RefreshCw,
   FolderArchive,
+  LayoutGrid,
+  List,
 } from 'lucide-react';
 import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
 import { StorageService, getImageFromDB } from '../services/storage';
@@ -72,6 +74,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [assetViewMode, setAssetViewMode] = useState<'cards' | 'table'>('cards');
 
   // Modals
   const [showAddEditModal, setShowAddEditModal] = useState(false);
@@ -560,6 +563,204 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     </div>
   );
 
+  const renderAssetsTable = (assetsList: Asset[], isSearchResult = false) => (
+    <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-right text-xs divide-y divide-slate-200">
+          <thead className="bg-slate-50 text-slate-700 font-bold">
+            <tr>
+              <th className="p-3 w-16 text-center">الصورة</th>
+              <th className="p-3 w-28">كود الجهاز (ID)</th>
+              <th className="p-3">اسم الجهاز</th>
+              <th className="p-3 w-36">القسم والموقع</th>
+              <th className="p-3 w-32">الموديل والمُصنّع</th>
+              <th className="p-3 w-28">السيريال (S.N)</th>
+              <th className="p-3 w-28 text-center">الكمية (حالية / دفترية)</th>
+              <th className="p-3 w-20 text-center">الفارق</th>
+              <th className="p-3 w-24 text-center">الحالة</th>
+              <th className="p-3 w-36 text-center">إجراءات</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {assetsList.map((asset) => (
+              <tr key={asset.id} className="hover:bg-slate-50/80 transition-colors">
+                {/* Image */}
+                <td className="p-2 text-center">
+                  <div
+                    onClick={() => {
+                      setSelectedAssetDetail(asset);
+                      setShowDetailModal(true);
+                    }}
+                    className="inline-block w-12 h-12 rounded-xl overflow-hidden border border-slate-200 shadow-2xs align-middle cursor-pointer hover:scale-105 transition-transform bg-slate-50"
+                    title="انقر لعرض تفاصيل وصورة الجهاز"
+                  >
+                    <AssetImage
+                      src={asset.imageUrl}
+                      hasCloudImage={asset.hasCloudImage}
+                      customId={asset.customId}
+                      serialNumber={asset.serialNumber}
+                      deviceName={asset.deviceName}
+                      alt={asset.deviceName}
+                      className="w-full h-full object-cover pointer-events-none"
+                      containerClassName="w-full h-full flex items-center justify-center bg-slate-100"
+                    />
+                  </div>
+                </td>
+
+                {/* Custom ID */}
+                <td className="p-3 whitespace-nowrap">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-1 rounded-lg border border-blue-200">
+                      {asset.customId}
+                    </span>
+                    <SyncStatusBadge
+                      item={asset}
+                      size="xs"
+                      variant="icon-only"
+                      onSyncNow={async () => {
+                        await FirestoreSyncService.syncAsset(asset);
+                        onRefresh();
+                      }}
+                    />
+                  </div>
+                </td>
+
+                {/* Device Name */}
+                <td className="p-3 whitespace-nowrap">
+                  <div className="font-bold text-slate-900 leading-snug">
+                    {asset.deviceName}
+                  </div>
+                  {asset.custodian && (
+                    <span className="text-[10px] text-slate-400 block mt-0.5">
+                      المستلم: {asset.custodian}
+                    </span>
+                  )}
+                </td>
+
+                {/* Department */}
+                <td className="p-3 whitespace-nowrap text-slate-600">
+                  <span className="font-medium text-slate-800">{asset.mainDepartment}</span>
+                  {asset.subDepartment && (
+                    <span className="text-[10px] text-slate-400 block">
+                      {asset.subDepartment}
+                    </span>
+                  )}
+                  {isSearchResult && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDept(asset.mainDepartment);
+                        setSelectedSubDept(asset.subDepartment);
+                        setSearchTerm('');
+                      }}
+                      className="text-[10px] text-blue-600 hover:text-blue-800 font-bold hover:underline block mt-0.5 cursor-pointer"
+                    >
+                      الانتقال للقسم ↲
+                    </button>
+                  )}
+                </td>
+
+                {/* Model & Manufacturer */}
+                <td className="p-3 whitespace-nowrap text-slate-600">
+                  <span className="block font-medium text-slate-800">{asset.model || '—'}</span>
+                  <span className="text-[10px] text-slate-400 block">{asset.manufacturer || '—'}</span>
+                </td>
+
+                {/* Serial Number */}
+                <td className="p-3 whitespace-nowrap font-mono text-slate-700 font-bold">
+                  {asset.serialNumber || '—'}
+                </td>
+
+                {/* Quantities */}
+                <td className="p-3 whitespace-nowrap text-center font-mono font-bold text-slate-900">
+                  <span>{asset.currentQuantity}</span>
+                  <span className="text-slate-400 mx-1">/</span>
+                  <span className="text-slate-600">{asset.bookQuantity}</span>
+                </td>
+
+                {/* Difference */}
+                <td className="p-3 whitespace-nowrap text-center font-mono font-bold">
+                  {asset.difference === 0 ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-100 text-slate-700">0</span>
+                  ) : asset.difference > 0 ? (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      +{asset.difference}
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] bg-red-50 text-red-700 border border-red-200">
+                      {asset.difference}
+                    </span>
+                  )}
+                </td>
+
+                {/* Status */}
+                <td className="p-3 whitespace-nowrap text-center">
+                  <span
+                    className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                      asset.status === 'شغال'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : asset.status === 'عاطل'
+                        ? 'bg-red-50 text-red-700 border border-red-200'
+                        : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    {asset.status}
+                  </span>
+                </td>
+
+                {/* Actions */}
+                <td className="p-3 whitespace-nowrap text-center">
+                  <div className="flex items-center justify-center gap-1">
+                    <button
+                      onClick={() => {
+                        setSelectedAssetDetail(asset);
+                        setShowDetailModal(true);
+                      }}
+                      className="p-1.5 rounded-lg bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-600 transition-colors cursor-pointer"
+                      title="عرض التفاصيل الكاملة"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      onClick={() => onOpenNewTicketForAsset(asset)}
+                      className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 transition-colors cursor-pointer"
+                      title="تقديم بلاغ صيانة"
+                    >
+                      <Wrench className="w-3.5 h-3.5" />
+                    </button>
+
+                    {currentUser?.role === 'admin' && (
+                      <>
+                        <button
+                          onClick={() => {
+                            setEditingAsset(asset);
+                            setShowAddEditModal(true);
+                          }}
+                          className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-500 hover:text-blue-600 transition-colors cursor-pointer"
+                          title="تعديل الجهاز"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteAssetConfirm(asset)}
+                          className="p-1.5 rounded-lg hover:bg-red-50 text-slate-500 hover:text-red-600 transition-colors cursor-pointer"
+                          title="حذف الجهاز"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       {/* Hidden file inputs */}
@@ -852,14 +1053,42 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setSearchTerm('')}
-              className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5 text-slate-500" />
-              <span>إلغاء البحث والعودة لتصفح الأقسام</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {/* View Mode Toggle */}
+              <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => setAssetViewMode('cards')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    assetViewMode === 'cards' ? 'bg-blue-50 text-blue-800 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="عرض الأجهزة كصور وكروت مرئية"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5 text-blue-600" />
+                  <span>عرض صور وكروت</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssetViewMode('table')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    assetViewMode === 'table' ? 'bg-blue-50 text-blue-800 shadow-2xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="عرض الأجهزة كجدول بيانات تفصيلي"
+                >
+                  <List className="w-3.5 h-3.5 text-slate-600" />
+                  <span>عرض جدول</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5 text-slate-500" />
+                <span>إلغاء البحث والعودة لتصفح الأقسام</span>
+              </button>
+            </div>
           </div>
 
           {currentViewAssets.length === 0 ? (
@@ -880,6 +1109,8 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                 مسح البحث وعرض كافة الأقسام
               </button>
             </div>
+          ) : assetViewMode === 'table' ? (
+            renderAssetsTable(currentViewAssets, true)
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {currentViewAssets.map((asset) => renderAssetCard(asset, true))}
@@ -1106,18 +1337,47 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       {/* ========================================================================= */}
       {selectedSubDept && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-              <Package className="w-4 h-4 text-blue-600" />
-              قائمة الأجهزة ({currentViewAssets.length} جهاز)
-            </h3>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <Package className="w-4 h-4 text-blue-600" />
+                قائمة الأجهزة ({currentViewAssets.length} جهاز)
+              </h3>
+
+              {/* View Mode Toggle */}
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setAssetViewMode('cards')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    assetViewMode === 'cards' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="عرض الأجهزة كصور وكروت مرئية"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5 text-blue-600" />
+                  <span>عرض صور وكروت</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAssetViewMode('table')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    assetViewMode === 'table' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="عرض الأجهزة كجدول بيانات تفصيلي"
+                >
+                  <List className="w-3.5 h-3.5 text-slate-600" />
+                  <span>عرض جدول</span>
+                </button>
+              </div>
+            </div>
+
             {currentUser?.role === 'admin' && (
               <button
                 onClick={() => {
                   setEditingAsset(null);
                   setShowAddEditModal(true);
                 }}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-500 transition-colors"
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-500 transition-colors cursor-pointer shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
                 إضافة جهاز بهذا القسم
@@ -1130,6 +1390,8 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
               <Package className="w-8 h-8 mx-auto mb-2 opacity-40 text-slate-400" />
               لا توجد أجهزة مسجلة تطابق التصفية الحالية
             </div>
+          ) : assetViewMode === 'table' ? (
+            renderAssetsTable(currentViewAssets, false)
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {currentViewAssets.map((asset) => renderAssetCard(asset, false))}
