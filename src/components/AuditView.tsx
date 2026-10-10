@@ -100,6 +100,12 @@ export const AuditView: React.FC<AuditViewProps> = ({
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [pdfExportError, setPdfExportError] = useState<string | null>(null);
 
+  // Printable report header state (Customizable with Yemeni Advisory Hospital defaults)
+  const [reportHeaderLine1, setReportHeaderLine1] = useState('المستشفى الاستشاري اليمني');
+  const [reportHeaderLine2, setReportHeaderLine2] = useState('إدارة الهندسة الطبية');
+  const [reportHeaderLine3, setReportHeaderLine3] = useState('إدارة الأصول والعهد');
+  const [showEditReportHeader, setShowEditReportHeader] = useState(false);
+
   // Item filters within active session
   const [itemStatusFilter, setItemStatusFilter] = useState<'all' | AuditItemStatus>('all');
   const [itemSearchQuery, setItemSearchQuery] = useState('');
@@ -2182,6 +2188,49 @@ export const AuditView: React.FC<AuditViewProps> = ({
                 </div>
               </div>
 
+              {/* Editable header accordion trigger */}
+              <div className="flex items-center justify-between px-1">
+                <button
+                  type="button"
+                  onClick={() => setShowEditReportHeader(!showEditReportHeader)}
+                  className="text-xs text-emerald-700 hover:text-emerald-800 font-bold underline flex items-center gap-1.5"
+                >
+                  {showEditReportHeader ? '▲ إخفاء تعديل الترويسة' : '✏️ تعديل ترويسة التقرير (اسم المستشفى والإدارة)'}
+                </button>
+              </div>
+
+              {showEditReportHeader && (
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs animate-in fade-in">
+                  <div>
+                    <label className="block text-[11px] text-slate-600 font-bold mb-1">السطر الأول (المستشفى / المنشأة):</label>
+                    <input
+                      type="text"
+                      value={reportHeaderLine1}
+                      onChange={(e) => setReportHeaderLine1(e.target.value)}
+                      className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold bg-white text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-600 font-bold mb-1">السطر الثاني (الإدارة):</label>
+                    <input
+                      type="text"
+                      value={reportHeaderLine2}
+                      onChange={(e) => setReportHeaderLine2(e.target.value)}
+                      className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold bg-white text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-600 font-bold mb-1">السطر الثالث (القسم / الوحدة):</label>
+                    <input
+                      type="text"
+                      value={reportHeaderLine3}
+                      onChange={(e) => setReportHeaderLine3(e.target.value)}
+                      className="w-full px-3 py-1.5 border border-slate-300 rounded-xl text-xs font-bold bg-white text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
               {pdfExportError && (
                 <div className="p-3 bg-red-50 text-red-700 rounded-xl text-xs flex items-center gap-2 border border-red-200">
                   <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
@@ -2195,10 +2244,10 @@ export const AuditView: React.FC<AuditViewProps> = ({
               {/* Report Header */}
               <div className="text-center pb-4 border-b-2 border-slate-900 space-y-1">
                 <div className="flex items-center justify-between text-xs text-slate-600 font-semibold mb-2">
-                  <div className="text-right">
-                    <div>المملكة العربية السعودية</div>
-                    <div>الشؤون الصحية وإدارة الأصول والخدمات الهندسية</div>
-                    <div>نظام إدارة الأصول والعهد الفنية المتكامل</div>
+                  <div className="text-right leading-relaxed">
+                    <div className="font-bold text-slate-900 text-sm">{reportHeaderLine1}</div>
+                    <div>{reportHeaderLine2}</div>
+                    <div>{reportHeaderLine3}</div>
                   </div>
                   <div className="text-center">
                     <h1 className="text-2xl font-black text-emerald-800">

@@ -2,6 +2,69 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { MaintenanceTicket, AuditSession } from '../types';
 
+// Helper to sanitize any CSS oklch() color functions which html2canvas cannot parse
+function sanitizeOklchColors(clonedDoc: Document, rootElementId: string): void {
+  const root = clonedDoc.getElementById(rootElementId);
+  if (!root) return;
+
+  const dummyCanvas = document.createElement('canvas');
+  dummyCanvas.width = 1;
+  dummyCanvas.height = 1;
+  const ctx = dummyCanvas.getContext('2d');
+
+  const convertColor = (val: string): string => {
+    if (!val || !val.includes('oklch')) return val;
+    if (ctx) {
+      try {
+        ctx.fillStyle = '#000000';
+        ctx.fillStyle = val;
+        const converted = ctx.fillStyle;
+        if (converted && !converted.includes('oklch')) {
+          return converted;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
+    // Safe fallbacks for Tailwind palette values
+    const lower = val.toLowerCase();
+    if (lower.includes('emerald') || lower.includes('green')) return '#047857';
+    if (lower.includes('red')) return '#dc2626';
+    if (lower.includes('amber') || lower.includes('yellow')) return '#d97706';
+    if (lower.includes('blue')) return '#2563eb';
+    if (lower.includes('purple')) return '#7c3aed';
+    if (lower.includes('slate') || lower.includes('gray') || lower.includes('zinc')) return '#334155';
+    return '#0f172a';
+  };
+
+  const colorProps = [
+    'color',
+    'backgroundColor',
+    'borderTopColor',
+    'borderRightColor',
+    'borderBottomColor',
+    'borderLeftColor',
+    'outlineColor',
+    'textDecorationColor',
+  ];
+
+  const allElements = [root, ...Array.from(root.querySelectorAll('*'))];
+  allElements.forEach((el) => {
+    if (el instanceof HTMLElement) {
+      const comp = window.getComputedStyle(el);
+      colorProps.forEach((prop) => {
+        // @ts-ignore
+        const currentVal = comp[prop];
+        if (typeof currentVal === 'string' && currentVal.includes('oklch')) {
+          const safeVal = convertColor(currentVal);
+          // @ts-ignore
+          el.style[prop] = safeVal;
+        }
+      });
+    }
+  });
+}
+
 export class PDFReportGenerator {
   static async exportTicketToPDF(ticket: MaintenanceTicket, elementId: string): Promise<void> {
     const reportElement = document.getElementById(elementId);
@@ -19,6 +82,9 @@ export class PDFReportGenerator {
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
+        onclone: (clonedDoc) => {
+          sanitizeOklchColors(clonedDoc, elementId);
+        },
       });
 
       const imgData = canvas.toDataURL('image/png');
@@ -73,6 +139,9 @@ export class PDFReportGenerator {
         logging: false,
         backgroundColor: '#ffffff',
         windowWidth: 1400, // Ensure wide landscape layout is captured
+        onclone: (clonedDoc) => {
+          sanitizeOklchColors(clonedDoc, elementId);
+        },
       });
 
       const imgData = canvas.toDataURL('image/png');

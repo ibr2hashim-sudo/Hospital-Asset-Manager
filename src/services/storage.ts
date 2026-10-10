@@ -1712,32 +1712,66 @@ export class StorageService {
       session.items.forEach((item) => {
         const assetIdx = assets.findIndex((a) => a.id === item.assetId || a.customId === item.customId);
         if (assetIdx !== -1) {
-          if (item.status === 'منقول' && item.actualDepartment) {
-            assets[assetIdx].mainDepartment = item.actualDepartment;
-            if (item.actualCustodian) assets[assetIdx].custodian = item.actualCustodian;
-            assets[assetIdx].updatedAt = nowStr;
-            updatedAssetsCount++;
-          } else if (item.status === 'مفقود') {
-            assets[assetIdx].status = 'تالف';
-            assets[assetIdx].notes = `${assets[assetIdx].notes ? assets[assetIdx].notes + ' - ' : ''}مفقود بمحضر جرد ${session.sessionNumber}`;
-            assets[assetIdx].updatedAt = nowStr;
-            updatedAssetsCount++;
+          const target = assets[assetIdx];
+
+          // Method 2 (Agreed with user):
+          // 1. Previous currentQuantity becomes bookQuantity
+          const previousCurrentQty = Number(target.currentQuantity ?? 1);
+          target.bookQuantity = previousCurrentQty;
+
+          // 2. Counted actual quantity from audit becomes currentQuantity
+          let newActualQty = 0;
+          if (item.status === 'مفقود') {
+            newActualQty = 0;
+            target.status = 'تالف';
+            target.notes = `${target.notes ? target.notes + ' - ' : ''}مفقود بمحضر جرد ${session.sessionNumber}`;
+          } else {
+            newActualQty = Number(
+              item.actualQuantity !== undefined && item.actualQuantity !== null
+                ? item.actualQuantity
+                : (item.expectedQuantity || 1)
+            );
           }
+          target.currentQuantity = Math.max(0, newActualQty);
+
+          // 3. Difference = currentQuantity - bookQuantity
+          target.difference = target.currentQuantity - target.bookQuantity;
+
+          // 4. Update relocated department & custodian
+          if (item.status === 'منقول' && item.actualDepartment) {
+            target.mainDepartment = item.actualDepartment;
+            if (item.actualCustodian) target.custodian = item.actualCustodian;
+            target.notes = `${target.notes ? target.notes + ' - ' : ''}منقول بموجب محضر جرد ${session.sessionNumber}`;
+          } else if (item.status === 'مطابق') {
+            if (item.actualDepartment && item.actualDepartment !== target.mainDepartment) {
+              target.mainDepartment = item.actualDepartment;
+            }
+            if (item.actualCustodian && item.actualCustodian !== target.custodian) {
+              target.custodian = item.actualCustodian;
+            }
+          }
+
+          target.updatedAt = nowStr;
+
+          // Sync each updated asset to Firestore
+          FirestoreSyncService.syncAsset(target);
+          updatedAssetsCount++;
         } else if (item.status === 'جديد_غير_مسجل') {
           // Add new asset to system
+          const qty = Math.max(1, Number(item.actualQuantity || 1));
           const newAsset: Asset = {
             id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
             customId: item.customId,
             deviceName: item.deviceName,
             mainDepartment: item.actualDepartment || item.mainDepartment,
             subDepartment: item.subDepartment || 'عام',
-            currentQuantity: 1,
+            currentQuantity: qty,
             bookQuantity: 0,
-            difference: 1,
+            difference: qty,
             model: item.model || 'غير محدد',
             serialNumber: item.serialNumber || 'غير محدد',
             manufacturer: 'غير محدد',
-            accessories: [],
+            accessories: (item.accessories || []).map((acc) => acc.name),
             status: 'شغال',
             custodian: item.actualCustodian || 'غير محدد',
             notes: `تم قيده بموجب دورة جرد ${session.sessionNumber}`,
