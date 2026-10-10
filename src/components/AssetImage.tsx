@@ -123,7 +123,6 @@ export const AssetImage: React.FC<AssetImageProps> = ({
     const keysToCheck = [
       src?.replace('idb://', ''),
       customId,
-      serialNumber,
     ].filter(Boolean) as string[];
 
     for (const key of keysToCheck) {
@@ -202,8 +201,8 @@ export const AssetImage: React.FC<AssetImageProps> = ({
               referrerPolicy="no-referrer"
               onError={async () => {
                 // If it was an external URL that failed, try fallback to IndexedDB
-                if (customId || serialNumber) {
-                  const fallback = await getImageFromDB(customId || serialNumber || '');
+                if (customId) {
+                  const fallback = await getImageFromDB(customId);
                   if (fallback) {
                     setResolvedSrc(fallback);
                     return;

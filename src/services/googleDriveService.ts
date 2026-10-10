@@ -343,8 +343,6 @@ export const GoogleDriveService = {
     assets.forEach((a, idx) => {
       if (a.customId) assetMap.set(cleanStr(a.customId), idx);
       if (a.id) assetMap.set(cleanStr(a.id), idx);
-      if (a.serialNumber && a.serialNumber !== 'غير محدد') assetMap.set(cleanStr(a.serialNumber), idx);
-      if (a.deviceName) assetMap.set(cleanStr(a.deviceName), idx);
     });
 
     const updatedAssets = [...assets];
@@ -389,11 +387,8 @@ export const GoogleDriveService = {
               reader.readAsDataURL(blob);
             });
 
-            // Save to IndexedDB
+            // Save to IndexedDB strictly under customId
             await saveImageToDB(targetAsset.customId, base64Data);
-            if (targetAsset.serialNumber && targetAsset.serialNumber !== 'غير محدد') {
-              await saveImageToDB(targetAsset.serialNumber, base64Data);
-            }
 
             // Update asset imageUrl with idb reference or direct thumbnail link
             const directThumbnail = file.id ? `https://drive.google.com/thumbnail?id=${file.id}&sz=w1000` : `idb://${targetAsset.customId}`;

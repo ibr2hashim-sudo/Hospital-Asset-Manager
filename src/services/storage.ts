@@ -1944,12 +1944,9 @@ export class StorageService {
       const cleanRawName = rawName.trim();
       const normRawName = norm(cleanRawName);
 
-      // Multi-strategy matching:
+      // Matching strictly by Custom ID (حصر المطابقة على كود الجهاز فقط):
       // 1. Exact Custom ID match (case-insensitive)
       // 2. Normalized Custom ID match
-      // 3. Serial Number match
-      // 4. Exact Device Name match
-      // 5. Filename contains custom ID or Custom ID contains filename
       let assetIdx = assets.findIndex((a) => a.customId.trim().toLowerCase() === cleanRawName.toLowerCase());
 
       if (assetIdx === -1) {
@@ -1957,20 +1954,12 @@ export class StorageService {
       }
 
       if (assetIdx === -1) {
-        assetIdx = assets.findIndex((a) => a.serialNumber && norm(a.serialNumber) === normRawName && norm(a.serialNumber) !== 'غيرمحدد');
-      }
-
-      if (assetIdx === -1) {
-        assetIdx = assets.findIndex((a) => norm(a.deviceName) === normRawName);
-      }
-
-      if (assetIdx === -1) {
-        // Fallback: If filename is like "DEV101_1" or "DEV101 (2)"
+        // Fallback for copy/duplicate suffixes: e.g. "ICU-001_1" or "ICU-001 (2)"
         const strippedName = cleanRawName.replace(/[\s_(\-#]+[0-9]+[)]*$/, '').trim();
         if (strippedName) {
           const normStripped = norm(strippedName);
           assetIdx = assets.findIndex(
-            (a) => norm(a.customId) === normStripped || (norm(a.serialNumber) === normStripped && norm(a.serialNumber) !== 'غيرمحدد')
+            (a) => norm(a.customId) === normStripped && norm(a.customId).length > 0
           );
         }
       }
@@ -1981,7 +1970,7 @@ export class StorageService {
           fileName: file.name,
           customId: cleanRawName,
           status: 'فشل',
-          reason: `لم يتم العثور على جهاز يطابق اسم الصورة (${cleanRawName}). تأكد أن اسم ملف الصورة يطابق كود الجهاز ID أو رقمه التسلسلي.`,
+          reason: `لم يتم العثور على جهاز يطابق كود الصورة (${cleanRawName}). تأكد أن اسم ملف الصورة يطابق كود الجهاز (ID).`,
         });
         continue;
       }
@@ -1990,13 +1979,9 @@ export class StorageService {
       try {
         const base64 = await this.fileToCompressedBase64(file);
         const targetCustomId = assets[assetIdx].customId;
-        const targetSerial = assets[assetIdx].serialNumber;
 
-        // 1. Save full image to IndexedDB under ID and Serial
+        // 1. Save full image to IndexedDB strictly under ID (كود الجهاز فقط)
         await saveImageToDB(targetCustomId, base64);
-        if (targetSerial && targetSerial !== 'غير محدد') {
-          await saveImageToDB(targetSerial, base64);
-        }
 
         // 2. Store indexed reference so localStorage doesn't hit quota limits
         assets[assetIdx].imageUrl = `idb://${targetCustomId}`;
@@ -2054,10 +2039,7 @@ export class StorageService {
       if (asset.imageUrl && asset.imageUrl.startsWith('data:image/')) {
         dataUrl = asset.imageUrl;
       } else {
-        dataUrl =
-          (await getImageFromDB(asset.customId)) ||
-          (asset.serialNumber && asset.serialNumber !== 'غير محدد' ? await getImageFromDB(asset.serialNumber) : null) ||
-          null;
+        dataUrl = (await getImageFromDB(asset.customId)) || null;
       }
 
       if (dataUrl && dataUrl.startsWith('data:image/')) {
