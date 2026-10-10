@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Download,
   Upload,
@@ -12,6 +12,8 @@ import {
   RefreshCw,
   Cloud,
   Image as ImageIcon,
+  Sparkles,
+  StopCircle,
 } from 'lucide-react';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { StorageService } from '../services/storage';
@@ -36,7 +38,12 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   const [isPushingCloud, setIsPushingCloud] = useState(false);
   const [isPullingCloud, setIsPullingCloud] = useState(false);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [isCleaningImages, setIsCleaningImages] = useState(false);
+  const [localImagesCount, setLocalImagesCount] = useState<number | null>(null);
   const [imageProgress, setImageProgress] = useState<{ current: number; total: number; key: string } | null>(null);
+
+  // Cancellation controller for image upload
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
 
   // Backup states
   const [isExportingBackup, setIsExportingBackup] = useState(false);
@@ -46,6 +53,18 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   // File Inputs
   const excelComprehensiveInputRef = useRef<HTMLInputElement>(null);
   const fullBackupInputRef = useRef<HTMLInputElement>(null);
+
+  // Load actual local images count
+  const updateLocalImagesCount = async () => {
+    try {
+      const count = await StorageService.getImagesCountFromDB();
+      setLocalImagesCount(count);
+    } catch {}
+  };
+
+  useEffect(() => {
+    updateLocalImagesCount();
+  }, []);
 
   // 1. Push all local DATA only to User's Firebase (Blue Button)
   const handlePushDataOnlyToCloud = async () => {
@@ -93,18 +112,23 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 3. Upload IMAGES only to Cloud (Orange Button)
+  // 3. Upload IMAGES only to Cloud (Orange Button) with AbortController
   const handleUploadImagesOnly = async () => {
+    const controller = new AbortController();
+    uploadAbortControllerRef.current = controller;
     setIsUploadingImages(true);
     setImageProgress(null);
-    setStatusMsg({ text: 'جاري فحص ورفع كافة صور الأجهزة من الذاكرة المحلية إلى السحابة...', type: 'info' });
+    setStatusMsg({ text: 'جاري فحص وتصفية ورفع صور الأجهزة إلى السحابة...', type: 'info' });
     try {
-      const res = await FirestoreSyncService.uploadAllImagesToCloud((current, total, key) => {
-        setImageProgress({ current, total, key });
-      });
+      const res = await FirestoreSyncService.uploadAllImagesToCloud(
+        (current, total, key) => {
+          setImageProgress({ current, total, key });
+        },
+        controller.signal
+      );
       setStatusMsg({
         text: res.message,
-        type: res.success ? 'success' : 'error',
+        type: res.cancelled ? 'info' : res.success ? 'success' : 'error',
       });
       if (res.success) {
         onRefresh();
@@ -117,6 +141,44 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     } finally {
       setIsUploadingImages(false);
       setImageProgress(null);
+      uploadAbortControllerRef.current = null;
+      updateLocalImagesCount();
+    }
+  };
+
+  // Cancel Image Upload Handler
+  const handleCancelImageUpload = () => {
+    if (uploadAbortControllerRef.current) {
+      uploadAbortControllerRef.current.abort();
+      setStatusMsg({
+        text: 'جاري إيقاف عملية الرفع وحفظ ما تم إنجازه إلى السحابة...',
+        type: 'info',
+      });
+    }
+  };
+
+  // Cleanup and Deduplicate Local Images (Purge serial entries, retain strictly customId)
+  const handleCleanupImages = async () => {
+    setIsCleaningImages(true);
+    setStatusMsg({
+      text: 'جاري تنظيف الذاكرة وحذف التكرارات وفلترة أرقام السيريال وحصر الصور على كود الجهاز (ID)...',
+      type: 'info',
+    });
+    try {
+      const res = await StorageService.cleanupAndDeduplicateImages();
+      setStatusMsg({
+        text: `تم تنظيف وتصفية الذاكرة بنجاح! تم حذف (${res.removedCount}) سجل مكرر وسيريال، وتثبيت (${res.afterCount}) صورة فعلية لأكواد أجهزتك فقط.`,
+        type: 'success',
+      });
+      await updateLocalImagesCount();
+      onRefresh();
+    } catch (err: any) {
+      setStatusMsg({
+        text: `فشل تنظيف الصور: ${err?.message || 'خطأ'}`,
+        type: 'error',
+      });
+    } finally {
+      setIsCleaningImages(false);
     }
   };
 
@@ -316,28 +378,43 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
           </div>
         )}
 
-        {/* Upload Progress for Images */}
+        {/* Upload Progress for Images with Cancel Button */}
         {isUploadingImages && imageProgress && (
-          <div className="p-3 bg-orange-50 border border-orange-200 rounded-2xl space-y-1.5 text-xs text-orange-950 font-bold">
+          <div className="p-3.5 bg-orange-50/95 border border-orange-200 rounded-2xl space-y-2 text-xs text-orange-950 font-bold shadow-xs animate-in fade-in">
             <div className="flex items-center justify-between text-[11px]">
-              <span>جاري رفع الصور للسحابة:</span>
-              <span className="font-mono text-orange-700">
-                {imageProgress.current} من {imageProgress.total} ({Math.round((imageProgress.current / imageProgress.total) * 100)}%)
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-orange-500 animate-ping" />
+                <span>جاري رفع الصور للسحابة:</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-orange-800 bg-orange-100 px-2 py-0.5 rounded-md">
+                  {imageProgress.current} من {imageProgress.total} ({Math.round((imageProgress.current / imageProgress.total) * 100)}%)
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCancelImageUpload}
+                  className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-[11px] flex items-center gap-1 transition-all cursor-pointer shadow-xs"
+                  title="إلغاء عملية الرفع فوراً مع حفظ ما تم رفعه بنجاح"
+                >
+                  <StopCircle className="w-3.5 h-3.5" />
+                  <span>إلغاء الرفع</span>
+                </button>
+              </div>
             </div>
-            <div className="w-full bg-orange-200 rounded-full h-2 overflow-hidden">
+            <div className="w-full bg-orange-200/80 rounded-full h-2.5 overflow-hidden">
               <div
-                className="bg-orange-600 h-full transition-all duration-200"
+                className="bg-orange-600 h-full transition-all duration-200 rounded-full"
                 style={{ width: `${Math.round((imageProgress.current / imageProgress.total) * 100)}%` }}
               />
             </div>
-            <div className="text-[10px] text-orange-600 truncate font-mono">
-              الصورة الحالية: {imageProgress.key}
+            <div className="flex items-center justify-between text-[10px] text-orange-700 font-medium">
+              <span className="truncate font-mono">الصورة الحالية: {imageProgress.key}</span>
+              <span className="shrink-0 text-slate-500">يمكنك الإلغاء في أي وقت دون فقدان ما تم رفعه</span>
             </div>
           </div>
         )}
 
-        {/* Section 1: User's Private Firebase Cloud (3 Specific Buttons) */}
+        {/* Section 1: User's Private Firebase Cloud */}
         <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50/80 via-slate-50 to-indigo-50/40 border border-blue-100/90 space-y-3.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
@@ -355,13 +432,13 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             </div>
           </div>
 
-          {/* 3 Buttons Grid: Blue, Green, Orange */}
+          {/* Buttons Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
             {/* 1. Blue Button: رفع ومزامنة البيانات */}
             <button
               type="button"
               onClick={handlePushDataOnlyToCloud}
-              disabled={isPushingCloud || isPullingCloud || isUploadingImages}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isCleaningImages}
               className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
               title="رفع ومزامنة كافة السجلات النصية فقط بدون الصور"
             >
@@ -373,7 +450,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             <button
               type="button"
               onClick={handlePullDataOnlyFromCloud}
-              disabled={isPushingCloud || isPullingCloud || isUploadingImages}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isCleaningImages}
               className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
               title="جلب وتحديث كافة السجلات النصية من السحابة بدون الصور بسرعة فائقة"
             >
@@ -381,21 +458,37 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               <span>{isPullingCloud ? 'جاري التنزيل...' : 'جلب وتحديث البيانات'}</span>
             </button>
 
-            {/* 3. Orange Button: رفع الصور (full width or distinct) */}
+            {/* 3. Orange Button: رفع الصور */}
             <button
               type="button"
               onClick={handleUploadImagesOnly}
-              disabled={isPushingCloud || isPullingCloud || isUploadingImages}
-              className="sm:col-span-2 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isCleaningImages}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
               title="رفع كافة صور الأجهزة المحفوظة محلياً إلى السحابة"
             >
               <ImageIcon className={`w-4 h-4 ${isUploadingImages ? 'animate-pulse' : ''}`} />
-              <span>{isUploadingImages ? 'جاري رفع الصور...' : 'رفع الصور'}</span>
+              <span>
+                {isUploadingImages
+                  ? 'جاري رفع الصور...'
+                  : `رفع الصور ${localImagesCount !== null ? `(${localImagesCount} صورة)` : ''}`}
+              </span>
+            </button>
+
+            {/* 4. Amber Button: تنظيف الصور وحذف التكرار */}
+            <button
+              type="button"
+              onClick={handleCleanupImages}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isCleaningImages}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
+              title="تنظيف الذاكرة وحذف التكرارات وفلترة السيريال وحصر الصور على كود الجهاز (ID) فقط"
+            >
+              <Sparkles className={`w-4 h-4 text-amber-600 ${isCleaningImages ? 'animate-spin' : ''}`} />
+              <span>{isCleaningImages ? 'جاري التنظيف...' : 'تنظيف الصور وحذف التكرار'}</span>
             </button>
           </div>
 
           <div className="text-[11px] text-slate-500 bg-white/80 p-2.5 rounded-xl border border-slate-200/80 leading-relaxed">
-            💡 <strong>ملاحظة ذكية:</strong> يتم جلب صور الأجهزة تلقائياً من السحابة عند الدخول لبطاقة كل جهاز وحفظها محلياً بنفس معرّف الـ (ID) لتوفير البيانات.
+            💡 <strong>حصر المطابقة على كود الجهاز:</strong> تم ضبط مطابقة وحفظ الصور على كود الجهاز (ID) حصراً لمنع التكرار وضمان الدقة التامة.
           </div>
         </div>
 

@@ -87,10 +87,6 @@ export const AssetImage: React.FC<AssetImageProps> = ({
       const cached = getFromMemoryImageCache(customId);
       if (cached) return cached;
     }
-    if (serialNumber) {
-      const cached = getFromMemoryImageCache(serialNumber);
-      if (cached) return cached;
-    }
     return null;
   });
 

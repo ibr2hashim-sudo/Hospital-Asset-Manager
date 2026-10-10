@@ -106,25 +106,29 @@ export async function saveImageToDB(customId: string, base64Data: string): Promi
       const store = tx.objectStore(IDB_STORE);
       
       const cleanKey = customId.trim().toLowerCase();
-      const rawKey = customId.trim();
-      const normalizedKey = normKey(customId);
-      
-      // Save primary key
+      // Store strictly under the single clean device code key (customId) without duplicate variants
       store.put({ customId: cleanKey, dataUrl: base64Data, updatedAt: Date.now() });
-      
-      // Also index raw and normalized keys if distinct
-      if (rawKey !== cleanKey) {
-        store.put({ customId: rawKey, dataUrl: base64Data, updatedAt: Date.now() });
-      }
-      if (normalizedKey && normalizedKey !== cleanKey) {
-        store.put({ customId: normalizedKey, dataUrl: base64Data, updatedAt: Date.now() });
-      }
       
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
   } catch (e) {
     console.warn('Fallback saving image in memory/localStorage:', e);
+  }
+}
+
+export async function getImagesCountFromDB(): Promise<number> {
+  try {
+    const db = await openImageDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.count();
+      req.onsuccess = () => resolve(req.result || 0);
+      req.onerror = () => resolve(0);
+    });
+  } catch {
+    return 0;
   }
 }
 
@@ -630,12 +634,9 @@ export class StorageService {
       );
     }
 
-    // If image is a base64 data URI, store in IndexedDB and replace with idb reference
+    // If image is a base64 data URI, store in IndexedDB strictly under device customId and replace with idb reference
     if (savedAsset.imageUrl && savedAsset.imageUrl.startsWith('data:')) {
       saveImageToDB(savedAsset.customId, savedAsset.imageUrl);
-      if (savedAsset.serialNumber && savedAsset.serialNumber !== 'غير محدد') {
-        saveImageToDB(savedAsset.serialNumber, savedAsset.imageUrl);
-      }
       savedAsset.imageUrl = `idb://${savedAsset.customId}`;
     }
 
@@ -2419,6 +2420,158 @@ export class StorageService {
         success: false,
         message: `فشل استعادة النسخة الاحتياطية: ${err?.message || 'خطأ في قراءة الملف'}`,
       };
+    }
+  }
+
+  static async getImagesCountFromDB(): Promise<number> {
+    return getImagesCountFromDB();
+  }
+
+  /**
+   * Cleans and deduplicates IndexedDB images:
+   * 1. Eliminates redundant variants (rawKey, normalizedKey, old serial number entries).
+   * 2. Migrates images stored under old serial numbers to the asset's true device customId.
+   * 3. Retains exactly ONE canonical record per registered device code (customId).
+   * 4. Cleans synced timestamps to match.
+   */
+  static async cleanupAndDeduplicateImages(): Promise<{
+    beforeCount: number;
+    afterCount: number;
+    removedCount: number;
+  }> {
+    try {
+      const db = await openImageDB();
+      const assets = this.getAssets();
+      const surgicalInstruments = getItem<any[]>('asset_mgmt_surgical_instruments', []);
+
+      // Authoritative maps of valid device codes
+      const validCodeMap = new Map<string, string>(); // cleanKey -> official customId
+      const assetByCleanId = new Map<string, Asset>();
+      const assetBySerial = new Map<string, Asset>();
+
+      assets.forEach((a) => {
+        if (a.customId) {
+          const k = a.customId.trim().toLowerCase();
+          validCodeMap.set(k, a.customId);
+          assetByCleanId.set(k, a);
+          const normK = normKey(a.customId);
+          if (normK) validCodeMap.set(normK, a.customId);
+        }
+        if (a.serialNumber && a.serialNumber !== 'غير محدد') {
+          const sClean = a.serialNumber.trim().toLowerCase();
+          assetBySerial.set(sClean, a);
+          const sNorm = normKey(a.serialNumber);
+          if (sNorm) assetBySerial.set(sNorm, a);
+        }
+      });
+
+      surgicalInstruments.forEach((i) => {
+        if (i.code) {
+          const k = i.code.trim().toLowerCase();
+          validCodeMap.set(k, i.code);
+          const normK = normKey(i.code);
+          if (normK) validCodeMap.set(normK, i.code);
+        }
+      });
+
+      // Get all current image records in IndexedDB
+      const allRecords = await getAllImageRecordsFromDB();
+      const beforeCount = allRecords.length;
+
+      // Group images strictly by their target canonical device customId (cleanKey)
+      const canonicalImages = new Map<string, { dataUrl: string; updatedAt: number }>();
+
+      // 1st pass: keep records that already match a valid device customId directly
+      for (const rec of allRecords) {
+        const cleanKey = rec.customId.trim().toLowerCase();
+        if (assetByCleanId.has(cleanKey)) {
+          const existing = canonicalImages.get(cleanKey);
+          if (!existing || (rec.updatedAt || 0) > existing.updatedAt) {
+            canonicalImages.set(cleanKey, {
+              dataUrl: rec.dataUrl,
+              updatedAt: rec.updatedAt || Date.now(),
+            });
+          }
+        }
+      }
+
+      // 2nd pass: if an asset doesn't have an image yet, see if it was stored under its serial number or raw key
+      for (const rec of allRecords) {
+        const cleanKey = rec.customId.trim().toLowerCase();
+        if (canonicalImages.has(cleanKey)) continue;
+
+        // Was this record a serial number of an asset?
+        const matchedAsset = assetBySerial.get(cleanKey);
+        if (matchedAsset && matchedAsset.customId) {
+          const targetKey = matchedAsset.customId.trim().toLowerCase();
+          if (!canonicalImages.has(targetKey)) {
+            canonicalImages.set(targetKey, {
+              dataUrl: rec.dataUrl,
+              updatedAt: rec.updatedAt || Date.now(),
+            });
+          }
+        }
+
+        // Or was it surgical instrument code?
+        if (validCodeMap.has(cleanKey)) {
+          const targetKey = validCodeMap.get(cleanKey)!.trim().toLowerCase();
+          if (!canonicalImages.has(targetKey)) {
+            canonicalImages.set(targetKey, {
+              dataUrl: rec.dataUrl,
+              updatedAt: rec.updatedAt || Date.now(),
+            });
+          }
+        }
+      }
+
+      // Clear the messy table and write back ONLY the canonical clean images
+      await new Promise<void>((resolve, reject) => {
+        const clearTx = db.transaction(IDB_STORE, 'readwrite');
+        const clearStore = clearTx.objectStore(IDB_STORE);
+        clearStore.clear();
+        clearTx.oncomplete = () => resolve();
+        clearTx.onerror = () => reject(clearTx.error);
+      });
+
+      // Write back canonical clean images
+      if (canonicalImages.size > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const writeTx = db.transaction(IDB_STORE, 'readwrite');
+          const writeStore = writeTx.objectStore(IDB_STORE);
+          canonicalImages.forEach((val, key) => {
+            writeStore.put({
+              customId: key,
+              dataUrl: val.dataUrl,
+              updatedAt: val.updatedAt,
+            });
+          });
+          writeTx.oncomplete = () => resolve();
+          writeTx.onerror = () => reject(writeTx.error);
+        });
+      }
+
+      // Clean synced timestamps in localStorage to only retain valid cleanKeys
+      try {
+        const syncedMeta: Record<string, number> = JSON.parse(
+          localStorage.getItem('asset_synced_images_timestamps') || '{}'
+        );
+        const cleanSyncedMeta: Record<string, number> = {};
+        for (const [key, ts] of Object.entries(syncedMeta)) {
+          const cleanKey = key.trim().toLowerCase();
+          if (canonicalImages.has(cleanKey)) {
+            cleanSyncedMeta[cleanKey] = ts;
+          }
+        }
+        localStorage.setItem('asset_synced_images_timestamps', JSON.stringify(cleanSyncedMeta));
+      } catch {}
+
+      const afterCount = canonicalImages.size;
+      const removedCount = Math.max(0, beforeCount - afterCount);
+
+      return { beforeCount, afterCount, removedCount };
+    } catch (err) {
+      console.error('cleanupAndDeduplicateImages error:', err);
+      return { beforeCount: 0, afterCount: 0, removedCount: 0 };
     }
   }
 }

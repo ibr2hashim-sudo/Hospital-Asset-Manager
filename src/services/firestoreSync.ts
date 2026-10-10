@@ -21,7 +21,7 @@ import {
   SurgicalSet,
   SurgicalInstrument,
 } from '../types';
-import { saveImageToDB, getAllImagesFromDB, getAllImageRecordsFromDB } from './storage';
+import { saveImageToDB, getAllImagesFromDB, getAllImageRecordsFromDB, StorageService } from './storage';
 
 function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
@@ -1130,12 +1130,26 @@ export class FirestoreSyncService {
   }
 
   /**
-   * Upload ONLY modified or newly added local images from IndexedDB to the private Firestore cloud
+   * Upload ONLY modified or newly added local images from IndexedDB to the private Firestore cloud.
+   * Supports cancellation via abortSignal and cleans up legacy duplicate keys before uploading.
    */
   static async uploadAllImagesToCloud(
-    onProgress?: (current: number, total: number, currentKey: string) => void
-  ): Promise<{ success: boolean; message: string; count: number }> {
+    onProgress?: (current: number, total: number, currentKey: string) => void,
+    abortSignal?: AbortSignal
+  ): Promise<{ success: boolean; message: string; count: number; cancelled?: boolean }> {
     try {
+      // 1. Clean and deduplicate images first, purging obsolete/serial/redundant entries
+      await StorageService.cleanupAndDeduplicateImages();
+
+      if (abortSignal?.aborted) {
+        return {
+          success: true,
+          cancelled: true,
+          message: 'تم إلغاء رفع الصور قبل البدء.',
+          count: 0,
+        };
+      }
+
       const allImages = await getAllImageRecordsFromDB();
       const totalLocal = allImages.length;
 
@@ -1170,6 +1184,17 @@ export class FirestoreSyncService {
 
       let uploaded = 0;
       for (let i = 0; i < imagesToUpload.length; i++) {
+        // Cancellation check
+        if (abortSignal?.aborted) {
+          localStorage.setItem('asset_synced_images_timestamps', JSON.stringify(syncedMeta));
+          return {
+            success: true,
+            cancelled: true,
+            message: `تم إلغاء رفع الصور بناءً على طلبك. تم حفظ (${uploaded} صورة) رُفعت بنجاح إلى السحابة قبل الإلغاء.`,
+            count: uploaded,
+          };
+        }
+
         const img = imagesToUpload[i];
         const cleanKey = img.customId.trim().toLowerCase();
 
@@ -1217,7 +1242,7 @@ export class FirestoreSyncService {
 
       return {
         success: true,
-        message: `تم فحص ${totalLocal} صورة، ورفع (${uploaded} صورة جديدة أو معدلة فقط) بنجاح إلى السحابة.`,
+        message: `تم فحص وتصفية ${totalLocal} صورة فعلية، ورفع (${uploaded} صورة جديدة أو معدلة فقط) بنجاح إلى السحابة.`,
         count: uploaded,
       };
     } catch (err: any) {
