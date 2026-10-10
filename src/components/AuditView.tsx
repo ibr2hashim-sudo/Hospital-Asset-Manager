@@ -498,6 +498,9 @@ export const AuditView: React.FC<AuditViewProps> = ({
     );
     setShowFinalizeModal(false);
     reloadSessions();
+    if (onRefresh) {
+      onRefresh();
+    }
     alert(res.message);
   };
 

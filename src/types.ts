@@ -31,6 +31,8 @@ export interface Asset {
   notes: string;               // 14. ملاحظات
   imageUrl?: string;           // 15. صورة الجهاز
   hasCloudImage?: boolean;     // تم رفع الصورة سحابياً
+  lastAuditDate?: string;      // تاريخ آخر جرد
+  lastAuditSession?: string;   // رقم محضر آخر جرد
   createdAt: string;
   updatedAt: string;
   syncedAt?: string;

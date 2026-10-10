@@ -1146,6 +1146,31 @@ export class StorageService {
       }
     }
 
+    // 5.b Add slash/dash/space interchangeable variants
+    // (e.g. if code scanned with / or -, match the other without modifying stored data)
+    for (const cand of Array.from(candidates)) {
+      const trimmed = cand.trim();
+      if (!trimmed) continue;
+      if (trimmed.includes('/')) {
+        candidates.add(trimmed.replace(/\//g, '-'));
+        candidates.add(trimmed.replace(/\//g, ' '));
+        candidates.add(trimmed.replace(/\//g, ''));
+      }
+      if (trimmed.includes('-')) {
+        candidates.add(trimmed.replace(/-/g, '/'));
+        candidates.add(trimmed.replace(/-/g, ' '));
+        candidates.add(trimmed.replace(/-/g, ''));
+      }
+      if (trimmed.includes('\\')) {
+        candidates.add(trimmed.replace(/\\/g, '-'));
+        candidates.add(trimmed.replace(/\\/g, '/'));
+      }
+      if (trimmed.includes(' ')) {
+        candidates.add(trimmed.replace(/\s+/g, '-'));
+        candidates.add(trimmed.replace(/\s+/g, ''));
+      }
+    }
+
     // 6. Add normalized versions
     const normalizedList: string[] = [];
     candidates.forEach((cand) => {
@@ -1751,6 +1776,8 @@ export class StorageService {
             }
           }
 
+          target.lastAuditDate = session.completedDate;
+          target.lastAuditSession = session.sessionNumber;
           target.updatedAt = nowStr;
 
           // Sync each updated asset to Firestore
@@ -1775,6 +1802,8 @@ export class StorageService {
             status: 'شغال',
             custodian: item.actualCustodian || 'غير محدد',
             notes: `تم قيده بموجب دورة جرد ${session.sessionNumber}`,
+            lastAuditDate: session.completedDate,
+            lastAuditSession: session.sessionNumber,
             createdAt: nowStr,
             updatedAt: nowStr,
           };
@@ -1786,6 +1815,7 @@ export class StorageService {
 
       if (updatedAssetsCount > 0) {
         setItem(STORAGE_KEYS.ASSETS, assets);
+        window.dispatchEvent(new CustomEvent('assets_updated', { detail: assets }));
       }
     }
 

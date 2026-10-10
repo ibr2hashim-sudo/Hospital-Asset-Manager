@@ -4,6 +4,18 @@ import { MaintenanceTicket, AuditSession } from '../types';
 
 // Helper to sanitize any CSS oklch() color functions which html2canvas cannot parse
 function sanitizeOklchColors(clonedDoc: Document, rootElementId: string): void {
+  // 1. Sanitize all <style> tags in the cloned document so html2canvas's CSS parser doesn't crash on oklch()
+  try {
+    const styleTags = clonedDoc.querySelectorAll('style');
+    styleTags.forEach((tag) => {
+      if (tag.textContent && tag.textContent.includes('oklch')) {
+        tag.textContent = tag.textContent.replace(/oklch\([^)]+\)/g, '#475569');
+      }
+    });
+  } catch (e) {
+    console.warn('Failed to sanitize style tags:', e);
+  }
+
   const root = clonedDoc.getElementById(rootElementId);
   if (!root) return;
 
@@ -40,27 +52,34 @@ function sanitizeOklchColors(clonedDoc: Document, rootElementId: string): void {
   const colorProps = [
     'color',
     'backgroundColor',
+    'borderColor',
     'borderTopColor',
     'borderRightColor',
     'borderBottomColor',
     'borderLeftColor',
     'outlineColor',
     'textDecorationColor',
+    'fill',
+    'stroke',
   ];
 
   const allElements = [root, ...Array.from(root.querySelectorAll('*'))];
   allElements.forEach((el) => {
-    if (el instanceof HTMLElement) {
-      const comp = window.getComputedStyle(el);
-      colorProps.forEach((prop) => {
-        // @ts-ignore
-        const currentVal = comp[prop];
-        if (typeof currentVal === 'string' && currentVal.includes('oklch')) {
-          const safeVal = convertColor(currentVal);
+    if (el instanceof HTMLElement || el instanceof SVGElement) {
+      try {
+        const comp = window.getComputedStyle(el);
+        colorProps.forEach((prop) => {
           // @ts-ignore
-          el.style[prop] = safeVal;
-        }
-      });
+          const currentVal = comp[prop];
+          if (typeof currentVal === 'string' && currentVal.includes('oklch')) {
+            const safeVal = convertColor(currentVal);
+            // @ts-ignore
+            el.style[prop] = safeVal;
+          }
+        });
+      } catch {
+        // ignore computed style read error on detached nodes
+      }
     }
   });
 }

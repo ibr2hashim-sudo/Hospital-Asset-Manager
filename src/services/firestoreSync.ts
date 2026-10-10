@@ -27,6 +27,15 @@ function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
 }
 
+/**
+ * Converts any customId into a valid Firestore single-segment document ID.
+ * Firestore document IDs cannot contain forward slashes ('/'), as slashes split paths into subcollections.
+ * Replacing slashes with '__slash__' ensures valid Firestore doc path while preserving reversibility.
+ */
+function toImageDocId(customId: string): string {
+  return customId.trim().toLowerCase().replace(/\//g, '__slash__');
+}
+
 interface RecentChange {
   col:
     | 'assets'
@@ -1168,7 +1177,8 @@ export class FirestoreSyncService {
           onProgress(i + 1, imagesToUpload.length, img.customId);
         }
 
-        const docRef = doc(db, 'asset_cloud_images', cleanKey);
+        const docId = toImageDocId(img.customId);
+        const docRef = doc(db, 'asset_cloud_images', docId);
         await setDoc(
           docRef,
           {
@@ -1227,8 +1237,17 @@ export class FirestoreSyncService {
     if (!customId) return null;
     try {
       const cleanKey = customId.trim().toLowerCase();
-      const docRef = doc(db, 'asset_cloud_images', cleanKey);
-      const snap = await getDoc(docRef);
+      const docId = toImageDocId(customId);
+      let snap = await getDoc(doc(db, 'asset_cloud_images', docId));
+
+      // Backward compatibility fallback in case it was stored directly with cleanKey without slashes
+      if (!snap.exists() && docId !== cleanKey) {
+        try {
+          snap = await getDoc(doc(db, 'asset_cloud_images', cleanKey));
+        } catch {
+          // ignore invalid path if cleanKey had slashes
+        }
+      }
 
       if (snap.exists()) {
         const data = snap.data();
