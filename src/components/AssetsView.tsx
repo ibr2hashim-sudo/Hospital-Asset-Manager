@@ -27,6 +27,7 @@ import {
   LayoutGrid,
   List,
   Loader2,
+  Maximize2,
 } from 'lucide-react';
 import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
 import { StorageService, getImageFromDB } from '../services/storage';
@@ -2128,6 +2129,7 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
   });
   const [isLoadingCloudImage, setIsLoadingCloudImage] = useState<boolean>(false);
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
+  const [showModalLightbox, setShowModalLightbox] = useState<boolean>(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -2260,17 +2262,28 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
                   جاري جلب صورة الجهاز من السحابة...
                 </span>
               </div>
+            ) : loadedImage ? (
+              <div
+                className="w-full h-full relative group cursor-pointer flex items-center justify-center bg-slate-900/5"
+                onClick={() => setShowModalLightbox(true)}
+                title="انقر لتكبير ومعاينة الصورة"
+              >
+                <img
+                  src={loadedImage}
+                  alt={asset.deviceName || asset.customId}
+                  className="w-full h-full object-contain"
+                />
+                <div className="absolute inset-0 bg-slate-950/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                  <span className="p-2 rounded-full bg-white/90 text-slate-800 shadow-md">
+                    <Maximize2 className="w-4 h-4" />
+                  </span>
+                </div>
+              </div>
             ) : (
-              <AssetImage
-                src={loadedImage || asset.imageUrl}
-                hasCloudImage={Boolean(loadedImage || asset.hasCloudImage)}
-                customId={asset.customId}
-                serialNumber={asset.serialNumber}
-                deviceName={asset.deviceName}
-                alt={asset.deviceName}
-                className="w-full h-full object-contain"
-                containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
-              />
+              <div className="flex flex-col items-center justify-center gap-2 text-slate-400 py-6">
+                <ImageIcon className="w-10 h-10 text-slate-300" />
+                <span className="text-xs font-semibold">لا توجد صورة متوفرة لهذا الجهاز</span>
+              </div>
             )}
           </div>
           <div className="flex items-center justify-between px-1 flex-wrap gap-2">
@@ -2295,6 +2308,39 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
             </span>
           </div>
         </div>
+
+        {/* Full Image Lightbox */}
+        {showModalLightbox && loadedImage && (
+          <div
+            className="fixed inset-0 z-[999] bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setShowModalLightbox(false)}
+          >
+            <div
+              className="relative max-w-4xl max-h-[90vh] bg-slate-900 rounded-2xl overflow-hidden shadow-2xl p-2 border border-slate-700 flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-3 border-b border-slate-800 text-white">
+                <span className="text-sm font-bold truncate max-w-md">
+                  {asset.deviceName} ({asset.customId})
+                </span>
+                <button
+                  onClick={() => setShowModalLightbox(false)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                  title="إغلاق"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-4 flex items-center justify-center overflow-auto max-h-[75vh]">
+                <img
+                  src={loadedImage}
+                  alt={asset.deviceName || asset.customId}
+                  className="max-w-full max-h-[70vh] object-contain rounded-lg"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 15 Attributes Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">

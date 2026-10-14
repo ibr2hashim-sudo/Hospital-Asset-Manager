@@ -38,12 +38,15 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   const [isPushingCloud, setIsPushingCloud] = useState(false);
   const [isPullingCloud, setIsPullingCloud] = useState(false);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
+  const [isDownloadingImages, setIsDownloadingImages] = useState(false);
   const [isCleaningImages, setIsCleaningImages] = useState(false);
   const [localImagesCount, setLocalImagesCount] = useState<number | null>(null);
   const [imageProgress, setImageProgress] = useState<{ current: number; total: number; key: string } | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{ current: number; total: number; key: string } | null>(null);
 
-  // Cancellation controller for image upload
+  // Cancellation controllers for image operations
   const uploadAbortControllerRef = useRef<AbortController | null>(null);
+  const downloadAbortControllerRef = useRef<AbortController | null>(null);
 
   // Backup states
   const [isExportingBackup, setIsExportingBackup] = useState(false);
@@ -152,6 +155,56 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
       uploadAbortControllerRef.current.abort();
       setStatusMsg({
         text: 'جاري إيقاف عملية الرفع وحفظ ما تم إنجازه إلى السحابة...',
+        type: 'info',
+      });
+    }
+  };
+
+  // 3b. Download all images from Cloud to Local IndexedDB
+  const handleDownloadImagesOnly = async () => {
+    setIsDownloadingImages(true);
+    setDownloadProgress(null);
+    setStatusMsg({
+      text: 'جاري الاتصال بالسحابة وبدء تنزيل صور الأجهزة إلى ذاكرة هذا الجهاز...',
+      type: 'info',
+    });
+
+    const abortController = new AbortController();
+    downloadAbortControllerRef.current = abortController;
+
+    try {
+      const res = await FirestoreSyncService.downloadAllImagesFromCloud(
+        (current, total, key) => {
+          setDownloadProgress({ current, total, key });
+        },
+        abortController.signal
+      );
+
+      setStatusMsg({
+        text: res.message,
+        type: res.success ? (res.cancelled ? 'info' : 'success') : 'error',
+      });
+      if (res.success && !res.cancelled) {
+        onRefresh();
+      }
+    } catch (err: any) {
+      setStatusMsg({
+        text: `فشل تنزيل الصور من السحابة: ${err?.message || 'خطأ غير متوقع'}`,
+        type: 'error',
+      });
+    } finally {
+      setIsDownloadingImages(false);
+      setDownloadProgress(null);
+      downloadAbortControllerRef.current = null;
+      await updateLocalImagesCount();
+    }
+  };
+
+  const handleCancelImageDownload = () => {
+    if (downloadAbortControllerRef.current) {
+      downloadAbortControllerRef.current.abort();
+      setStatusMsg({
+        text: 'جاري إيقاف عملية تنزيل الصور وحفظ ما تم تنزيله بنجاح...',
         type: 'info',
       });
     }
@@ -414,6 +467,42 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
           </div>
         )}
 
+        {/* Download Progress for Images with Cancel Button */}
+        {isDownloadingImages && downloadProgress && (
+          <div className="p-3.5 bg-teal-50/95 border border-teal-200 rounded-2xl space-y-2 text-xs text-teal-950 font-bold shadow-xs animate-in fade-in">
+            <div className="flex items-center justify-between text-[11px]">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-teal-500 animate-ping" />
+                <span>جاري تنزيل الصور من السحابة إلى هذا الجهاز:</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-teal-800 bg-teal-100 px-2 py-0.5 rounded-md">
+                  {downloadProgress.current} من {downloadProgress.total} ({Math.round((downloadProgress.current / downloadProgress.total) * 100)}%)
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCancelImageDownload}
+                  className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-[11px] flex items-center gap-1 transition-all cursor-pointer shadow-xs"
+                  title="إلغاء عملية التنزيل فوراً مع حفظ ما تم تنزيله"
+                >
+                  <StopCircle className="w-3.5 h-3.5" />
+                  <span>إلغاء التنزيل</span>
+                </button>
+              </div>
+            </div>
+            <div className="w-full bg-teal-200/80 rounded-full h-2.5 overflow-hidden">
+              <div
+                className="bg-teal-600 h-full transition-all duration-200 rounded-full"
+                style={{ width: `${Math.round((downloadProgress.current / downloadProgress.total) * 100)}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-teal-700 font-medium">
+              <span className="truncate font-mono">الصورة الحالية: {downloadProgress.key}</span>
+              <span className="shrink-0 text-slate-500">يتم الحفظ في ذاكرة هذا الجهاز فورياً</span>
+            </div>
+          </div>
+        )}
+
         {/* Section 1: User's Private Firebase Cloud */}
         <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50/80 via-slate-50 to-indigo-50/40 border border-blue-100/90 space-y-3.5">
           <div className="flex items-center justify-between">
@@ -438,7 +527,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             <button
               type="button"
               onClick={handlePushDataOnlyToCloud}
-              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isCleaningImages}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isDownloadingImages || isCleaningImages}
               className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
               title="رفع ومزامنة كافة السجلات النصية فقط بدون الصور"
             >
@@ -450,7 +539,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             <button
               type="button"
               onClick={handlePullDataOnlyFromCloud}
-              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isCleaningImages}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isDownloadingImages || isCleaningImages}
               className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
               title="جلب وتحديث كافة السجلات النصية من السحابة بدون الصور بسرعة فائقة"
             >
@@ -462,7 +551,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
             <button
               type="button"
               onClick={handleUploadImagesOnly}
-              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isCleaningImages}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isDownloadingImages || isCleaningImages}
               className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
               title="رفع كافة صور الأجهزة المحفوظة محلياً إلى السحابة"
             >
@@ -470,16 +559,32 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
               <span>
                 {isUploadingImages
                   ? 'جاري رفع الصور...'
-                  : `رفع الصور ${localImagesCount !== null ? `(${localImagesCount} صورة)` : ''}`}
+                  : `رفع الصور للسحابة ${localImagesCount !== null ? `(${localImagesCount} محلياً)` : ''}`}
               </span>
             </button>
 
-            {/* 4. Amber Button: تنظيف الصور وحذف التكرار */}
+            {/* 4. Teal Button: تحميل صور الأجهزة من السحابة لهذا الجهاز */}
+            <button
+              type="button"
+              onClick={handleDownloadImagesOnly}
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isDownloadingImages || isCleaningImages}
+              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
+              title="تنزيل وتثبيت كافة صور الأجهزة من السحابة إلى هذا الجهاز الجديد لتعمل فورياً وبدون إنترنت"
+            >
+              <Download className={`w-4 h-4 ${isDownloadingImages ? 'animate-bounce' : ''}`} />
+              <span>
+                {isDownloadingImages
+                  ? 'جاري تنزيل الصور...'
+                  : 'تحميل الصور من السحابة لهذا الجهاز'}
+              </span>
+            </button>
+
+            {/* 5. Amber Button: تنظيف الصور وحذف التكرار */}
             <button
               type="button"
               onClick={handleCleanupImages}
-              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isCleaningImages}
-              className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
+              disabled={isPushingCloud || isPullingCloud || isUploadingImages || isDownloadingImages || isCleaningImages}
+              className="sm:col-span-2 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 font-bold transition-all shadow-xs disabled:opacity-50 text-xs cursor-pointer active:scale-[0.98]"
               title="تنظيف الذاكرة وحذف التكرارات وفلترة السيريال وحصر الصور على كود الجهاز (ID) فقط"
             >
               <Sparkles className={`w-4 h-4 text-amber-600 ${isCleaningImages ? 'animate-spin' : ''}`} />
@@ -488,7 +593,7 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
           </div>
 
           <div className="text-[11px] text-slate-500 bg-white/80 p-2.5 rounded-xl border border-slate-200/80 leading-relaxed">
-            💡 <strong>حصر المطابقة على كود الجهاز:</strong> تم ضبط مطابقة وحفظ الصور على كود الجهاز (ID) حصراً لمنع التكرار وضمان الدقة التامة.
+            💡 <strong>للأجهزة الجديدة:</strong> انقر على <em>تحميل الصور من السحابة لهذا الجهاز</em> لتنزيل كافة صور أجهزتك إلى المتصفح الحالي لتعمل فورياً وبدون إنترنت في الجداول والبطاقات. كما يتم جلب صورة أي جهاز تلقائياً عند فتح تفاصيله.
           </div>
         </div>
 

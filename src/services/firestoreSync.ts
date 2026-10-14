@@ -1301,6 +1301,16 @@ export class FirestoreSyncService {
         }
       }
 
+      // Fallback for normalized keys without hyphens/spaces (e.g. 010057 if 01-0057)
+      if (!snap.exists()) {
+        const strippedKey = cleanKey.replace(/[-_/\s]/g, '');
+        if (strippedKey && strippedKey !== cleanKey && strippedKey !== docId) {
+          try {
+            snap = await getDoc(doc(db, 'asset_cloud_images', strippedKey));
+          } catch {}
+        }
+      }
+
       if (snap.exists()) {
         const data = snap.data();
         if (data?.dataUrl) {
@@ -1337,6 +1347,124 @@ export class FirestoreSyncService {
     } catch (err) {
       console.warn(`[Firestore]: Failed to fetch image for ${customId} from cloud:`, err);
       return null;
+    }
+  }
+
+  /**
+   * Download all images from Firestore cloud (asset_cloud_images) into local IndexedDB
+   * Supports cancellation and progress callback. Populates all images on a new device.
+   */
+  static async downloadAllImagesFromCloud(
+    onProgress?: (current: number, total: number, currentKey: string) => void,
+    abortSignal?: AbortSignal
+  ): Promise<{ success: boolean; message: string; count: number; cancelled?: boolean }> {
+    try {
+      if (abortSignal?.aborted) {
+        return {
+          success: true,
+          cancelled: true,
+          message: 'تم إلغاء تنزيل الصور قبل البدء.',
+          count: 0,
+        };
+      }
+
+      console.log('[Firestore]: Fetching all cloud images metadata...');
+      const imgCollRef = collection(db, 'asset_cloud_images');
+      const snap = await getDocs(imgCollRef);
+
+      if (snap.empty) {
+        return {
+          success: true,
+          message: 'لا توجد أي صور مخزنة على السحابة لتنزيلها حالياً.',
+          count: 0,
+        };
+      }
+
+      const totalDocs = snap.size;
+      let downloaded = 0;
+      const syncedMeta: Record<string, number> = JSON.parse(
+        localStorage.getItem('asset_synced_images_timestamps') || '{}'
+      );
+
+      const docs = snap.docs;
+      for (let i = 0; i < docs.length; i++) {
+        if (abortSignal?.aborted) {
+          localStorage.setItem('asset_synced_images_timestamps', JSON.stringify(syncedMeta));
+          return {
+            success: true,
+            cancelled: true,
+            message: `تم إلغاء التنزيل. تم حفظ (${downloaded} صورة) بنجاح على هذا الجهاز قبل الإلغاء.`,
+            count: downloaded,
+          };
+        }
+
+        const docSnap = docs[i];
+        const data = docSnap.data();
+        const customId = data.customId || docSnap.id;
+        const dataUrl = data.dataUrl;
+
+        if (onProgress) {
+          onProgress(i + 1, totalDocs, customId);
+        }
+
+        if (customId && dataUrl) {
+          await saveImageToDB(customId, dataUrl);
+          const cleanK = customId.trim().toLowerCase();
+          syncedMeta[cleanK] = Date.now();
+          downloaded++;
+
+          // Periodically notify UI to update thumbnails
+          if (downloaded % 15 === 0 && typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent('asset-image-loaded', {
+                detail: { customId, dataUrl },
+              })
+            );
+          }
+        }
+      }
+
+      localStorage.setItem('asset_synced_images_timestamps', JSON.stringify(syncedMeta));
+
+      // Mark local assets as having cloud images and idb links
+      try {
+        const assetsStr = localStorage.getItem('asset_mgmt_assets');
+        if (assetsStr) {
+          const assets: Asset[] = JSON.parse(assetsStr);
+          let modified = false;
+          assets.forEach((a) => {
+            const k = a.customId?.trim().toLowerCase();
+            if (k && syncedMeta[k]) {
+              a.hasCloudImage = true;
+              if (!a.imageUrl) a.imageUrl = `idb://${a.customId}`;
+              modified = true;
+            }
+          });
+          if (modified) {
+            localStorage.setItem('asset_mgmt_assets', JSON.stringify(assets));
+          }
+        }
+      } catch (e) {
+        console.warn('Could not update local assets flags after downloading cloud images:', e);
+      }
+
+      // Notify window listeners to refresh image components
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('asset-all-images-downloaded', { detail: { count: downloaded } }));
+      }
+
+      return {
+        success: true,
+        message: `تم جلب وتخزين (${downloaded} صورة جهاز) بنجاح من السحابة إلى هذا الجهاز! كافة الصور متوفرة الآن محلياً وفورياً حتى دون إنترنت.`,
+        count: downloaded,
+      };
+    } catch (err: any) {
+      this.handleSyncError('downloadAllImagesFromCloud', err);
+      return {
+        success: false,
+        message: `فشل تنزيل الصور من السحابة: ${err?.message || 'خطأ غير متوقع'}`,
+        count: 0,
+      };
     }
   }
 
