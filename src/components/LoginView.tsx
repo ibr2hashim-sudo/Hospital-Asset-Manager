@@ -166,6 +166,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           </div>
         </div>
       </div>
+
+      {/* Developer Copyright & Attribution */}
+      <div className="mt-6 text-center space-y-1 text-slate-400 text-xs z-10">
+        <p className="font-semibold text-slate-300">
+          إدارة الأصول والهندسة الطبية © 2026 | جميع الحقوق محفوظة
+        </p>
+        <p className="text-[11px] text-slate-500">
+          إعداد وتنفيذ: <span className="text-slate-300 font-bold">المهندس إبراهيم هاشم</span> (تطوير وإدارة النظام)
+        </p>
+      </div>
     </div>
   );
 };

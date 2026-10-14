@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Package,
   Plus,
@@ -26,11 +26,17 @@ import {
   FolderArchive,
   LayoutGrid,
   List,
+  Loader2,
 } from 'lucide-react';
 import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
 import { StorageService, getImageFromDB } from '../services/storage';
 import { ExcelUtils } from '../utils/excelImportExport';
-import { AssetImage } from './AssetImage';
+import {
+  AssetImage,
+  getFromMemoryImageCache,
+  setMemoryImageCache,
+  normalizeImageUrl,
+} from './AssetImage';
 import { BarcodeCameraScanner } from './BarcodeCameraScanner';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import { FirestoreSyncService } from '../services/firestoreSync';
@@ -2110,26 +2116,115 @@ interface AssetDetailModalProps {
 }
 
 const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onOpenTicket }) => {
+  const [loadedImage, setLoadedImage] = useState<string | null>(() => {
+    if (asset.customId) {
+      const cached = getFromMemoryImageCache(asset.customId);
+      if (cached) return cached;
+    }
+    if (asset.imageUrl && !asset.imageUrl.startsWith('idb://')) {
+      return normalizeImageUrl(asset.imageUrl);
+    }
+    return null;
+  });
+  const [isLoadingCloudImage, setIsLoadingCloudImage] = useState<boolean>(false);
+  const [isDownloading, setIsDownloading] = useState<boolean>(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchDetailImage = async () => {
+      // 1. If already have in-memory loaded image, do nothing
+      if (loadedImage) return;
+
+      // 2. Check IndexedDB
+      if (asset.customId) {
+        try {
+          const dbData = await getImageFromDB(asset.customId);
+          if (dbData && isMounted) {
+            setLoadedImage(dbData);
+            setMemoryImageCache(asset.customId, dbData);
+            return;
+          }
+        } catch {}
+      }
+
+      // 3. If not in DB, attempt on-demand Cloud Fetch for this specific viewed item
+      if (asset.customId) {
+        setIsLoadingCloudImage(true);
+        try {
+          const cloudData = await FirestoreSyncService.fetchImageFromCloud(asset.customId);
+          if (cloudData && isMounted) {
+            setLoadedImage(cloudData);
+            setMemoryImageCache(asset.customId, cloudData);
+          }
+        } catch (e) {
+          console.warn('Could not fetch cloud image in detail view:', e);
+        } finally {
+          if (isMounted) setIsLoadingCloudImage(false);
+        }
+      }
+    };
+
+    fetchDetailImage();
+
+    // Listen for image loaded event from other components or downloads
+    const handleImageLoaded = (e: Event) => {
+      const customEvent = e as CustomEvent<{ customId: string; dataUrl: string }>;
+      if (
+        customEvent.detail?.customId?.trim().toLowerCase() ===
+          asset.customId?.trim().toLowerCase() &&
+        customEvent.detail?.dataUrl
+      ) {
+        if (isMounted) {
+          setLoadedImage(customEvent.detail.dataUrl);
+          setIsLoadingCloudImage(false);
+        }
+      }
+    };
+    window.addEventListener('asset-image-loaded', handleImageLoaded);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('asset-image-loaded', handleImageLoaded);
+    };
+  }, [asset.customId]);
+
   const handleSaveImageToFile = async () => {
-    let dataUrl = await getImageFromDB(asset.customId);
-    if (!dataUrl && asset.customId) {
-      dataUrl = await FirestoreSyncService.fetchImageFromCloud(asset.customId);
-    }
-    if (!dataUrl && asset.imageUrl && !asset.imageUrl.startsWith('idb://')) {
-      dataUrl = asset.imageUrl;
-    }
+    setIsDownloading(true);
+    try {
+      let dataUrl = loadedImage;
+      if (!dataUrl && asset.customId) {
+        dataUrl = await getImageFromDB(asset.customId);
+      }
+      if (!dataUrl && asset.customId) {
+        dataUrl = await FirestoreSyncService.fetchImageFromCloud(asset.customId);
+      }
+      if (!dataUrl && asset.imageUrl && !asset.imageUrl.startsWith('idb://')) {
+        dataUrl = asset.imageUrl;
+      }
 
-    if (!dataUrl) {
-      alert('لا توجد صورة متوفرة لهذا الجهاز لتنزيلها.');
-      return;
-    }
+      if (!dataUrl) {
+        alert('لا توجد صورة متوفرة لهذا الجهاز لتنزيلها.');
+        return;
+      }
 
-    const link = document.createElement('a');
-    link.href = dataUrl;
-    link.download = `${asset.customId || 'device-image'}.jpg`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      // Update state and memory cache immediately so image shows on screen
+      setLoadedImage(dataUrl);
+      if (asset.customId) {
+        setMemoryImageCache(asset.customId, dataUrl);
+      }
+
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `${asset.customId || 'device-image'}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      alert(`حدث خطأ أثناء تنزيل الصورة: ${err?.message || 'خطأ غير متوقع'}`);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
@@ -2157,30 +2252,46 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
 
         {/* Image Display & Save Button */}
         <div className="space-y-2">
-          <div className="h-60 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center">
-            <AssetImage
-              src={asset.imageUrl}
-              hasCloudImage={asset.hasCloudImage}
-              customId={asset.customId}
-              serialNumber={asset.serialNumber}
-              deviceName={asset.deviceName}
-              alt={asset.deviceName}
-              className="w-full h-full object-contain"
-              containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
-            />
+          <div className="h-64 w-full rounded-xl overflow-hidden border border-slate-200 bg-slate-100 flex items-center justify-center relative">
+            {isLoadingCloudImage && !loadedImage ? (
+              <div className="flex flex-col items-center justify-center gap-2 text-slate-500 py-6">
+                <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                <span className="text-xs font-semibold text-slate-600">
+                  جاري جلب صورة الجهاز من السحابة...
+                </span>
+              </div>
+            ) : (
+              <AssetImage
+                src={loadedImage || asset.imageUrl}
+                hasCloudImage={Boolean(loadedImage || asset.hasCloudImage)}
+                customId={asset.customId}
+                serialNumber={asset.serialNumber}
+                deviceName={asset.deviceName}
+                alt={asset.deviceName}
+                className="w-full h-full object-contain"
+                containerClassName="w-full h-full flex items-center justify-center relative bg-slate-100"
+              />
+            )}
           </div>
-          <div className="flex items-center justify-between px-1">
+          <div className="flex items-center justify-between px-1 flex-wrap gap-2">
             <button
               type="button"
               onClick={handleSaveImageToFile}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors border border-slate-200 shadow-2xs cursor-pointer"
+              disabled={isDownloading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-colors border border-slate-200 shadow-2xs cursor-pointer disabled:opacity-50"
               title={`حفظ وتنزيل الصورة باسم ${asset.customId}`}
             >
-              <Download className="w-3.5 h-3.5 text-blue-600" />
+              {isDownloading ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+              ) : (
+                <Download className="w-3.5 h-3.5 text-blue-600" />
+              )}
               <span>حفظ وتنزيل الصورة باسم ({asset.customId})</span>
             </button>
             <span className="text-[11px] text-slate-400">
-              يتم جلب الصورة تلقائياً من السحابة وحفظها محلياً
+              {loadedImage
+                ? 'الصورة متوفرة ومحفوظة محلياً'
+                : 'يتم جلب الصورة تلقائياً من السحابة عند الدخول للصنف'}
             </span>
           </div>
         </div>

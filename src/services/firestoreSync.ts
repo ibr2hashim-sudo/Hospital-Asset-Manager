@@ -961,6 +961,12 @@ export class FirestoreSyncService {
           if (!remote.syncedAt) remote.syncedAt = remote.updatedAt || pullNow;
           const idx = localAssets.findIndex((a) => a.id === remote.id || a.customId === remote.customId);
           if (idx !== -1) {
+            if (!remote.imageUrl && localAssets[idx].imageUrl) {
+              remote.imageUrl = localAssets[idx].imageUrl;
+            }
+            if (localAssets[idx].hasCloudImage) {
+              remote.hasCloudImage = true;
+            }
             localAssets[idx] = remote;
           } else {
             localAssets.unshift(remote);
@@ -1221,24 +1227,45 @@ export class FirestoreSyncService {
 
       localStorage.setItem('asset_synced_images_timestamps', JSON.stringify(syncedMeta));
 
-      // Mark corresponding local assets as hasCloudImage = true
+      // Mark corresponding local assets as hasCloudImage = true and sync flag to Firestore
       try {
         const assetsStr = localStorage.getItem('asset_mgmt_assets');
         if (assetsStr) {
           const assets: Asset[] = JSON.parse(assetsStr);
           let modified = false;
+          const assetsToUpdateInFirestore: Asset[] = [];
           assets.forEach((a) => {
-            const k = a.customId.trim().toLowerCase();
-            if (syncedMeta[k]) {
-              a.hasCloudImage = true;
-              modified = true;
+            const k = a.customId?.trim().toLowerCase();
+            if (k && syncedMeta[k]) {
+              if (!a.hasCloudImage || !a.imageUrl) {
+                a.hasCloudImage = true;
+                if (!a.imageUrl) a.imageUrl = `idb://${a.customId}`;
+                modified = true;
+                assetsToUpdateInFirestore.push(a);
+              }
             }
           });
           if (modified) {
             localStorage.setItem('asset_mgmt_assets', JSON.stringify(assets));
+            // Batch update Firestore assets with hasCloudImage = true
+            for (let i = 0; i < assetsToUpdateInFirestore.length; i += 200) {
+              const batch = writeBatch(db);
+              const chunk = assetsToUpdateInFirestore.slice(i, i + 200);
+              chunk.forEach((assetItem) => {
+                const ref = doc(db, 'assets', assetItem.id);
+                batch.set(
+                  ref,
+                  { hasCloudImage: true, imageUrl: `idb://${assetItem.customId}` },
+                  { merge: true }
+                );
+              });
+              await batch.commit();
+            }
           }
         }
-      } catch {}
+      } catch (e) {
+        console.warn('Could not sync hasCloudImage flag to Firestore assets:', e);
+      }
 
       return {
         success: true,
@@ -1279,6 +1306,30 @@ export class FirestoreSyncService {
         if (data?.dataUrl) {
           // Cache in local IndexedDB so next time it is instant & offline
           await saveImageToDB(customId, data.dataUrl);
+
+          // Update local asset in localStorage
+          try {
+            const assetsStr = localStorage.getItem('asset_mgmt_assets');
+            if (assetsStr) {
+              const assets: Asset[] = JSON.parse(assetsStr);
+              const idx = assets.findIndex((a) => a.customId?.trim().toLowerCase() === cleanKey);
+              if (idx !== -1) {
+                assets[idx].hasCloudImage = true;
+                if (!assets[idx].imageUrl) assets[idx].imageUrl = `idb://${assets[idx].customId}`;
+                localStorage.setItem('asset_mgmt_assets', JSON.stringify(assets));
+              }
+            }
+          } catch {}
+
+          // Notify window listeners (including AssetImage and AssetDetailModal)
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent('asset-image-loaded', {
+                detail: { customId, dataUrl: data.dataUrl },
+              })
+            );
+          }
+
           return data.dataUrl;
         }
       }

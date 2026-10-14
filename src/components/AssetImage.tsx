@@ -98,6 +98,16 @@ export const AssetImage: React.FC<AssetImageProps> = ({
     let isMounted = true;
     setHasError(false);
 
+    // Check memory cache first even if props are missing
+    if (customId) {
+      const cached = getFromMemoryImageCache(customId);
+      if (cached) {
+        setResolvedSrc(cached);
+        setIsLoading(false);
+        return;
+      }
+    }
+
     // If strictly NO image is associated with this asset, do NOT query DB or Firestore
     if (!src && !hasCloudImage) {
       setResolvedSrc(null);
@@ -115,7 +125,7 @@ export const AssetImage: React.FC<AssetImageProps> = ({
       }
     }
 
-    // 2. Check in-memory cache first
+    // 2. Check in-memory cache
     const keysToCheck = [
       src?.replace('idb://', ''),
       customId,
@@ -169,10 +179,25 @@ export const AssetImage: React.FC<AssetImageProps> = ({
 
     fetchFromDB();
 
+    // Listen for image loaded event from modal or download actions
+    const handleImageLoaded = (e: Event) => {
+      const customEvent = e as CustomEvent<{ customId: string; dataUrl: string }>;
+      const targetId = customEvent.detail?.customId?.trim().toLowerCase();
+      if (customId && targetId === customId.trim().toLowerCase() && customEvent.detail?.dataUrl) {
+        if (isMounted) {
+          setResolvedSrc(customEvent.detail.dataUrl);
+          setIsLoading(false);
+          setHasError(false);
+        }
+      }
+    };
+    window.addEventListener('asset-image-loaded', handleImageLoaded);
+
     return () => {
       isMounted = false;
+      window.removeEventListener('asset-image-loaded', handleImageLoaded);
     };
-  }, [src, customId, serialNumber]);
+  }, [src, customId, serialNumber, hasCloudImage]);
 
   const handleImageClick = (e: React.MouseEvent) => {
     if (onClick) {

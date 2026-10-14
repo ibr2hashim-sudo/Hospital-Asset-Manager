@@ -16,6 +16,8 @@ import {
   AlertOctagon,
   Scissors,
   WifiOff,
+  Mail,
+  Phone,
 } from 'lucide-react';
 import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User } from './types';
 import { StorageService } from './services/storage';
@@ -113,7 +115,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100/70 text-slate-900 font-['Tajawal',sans-serif] text-right" dir="rtl">
+    <div className="min-h-screen bg-slate-100/70 text-slate-900 font-['Tajawal',sans-serif] text-right flex flex-col justify-between" dir="rtl">
       {/* Top Main Navigation Bar */}
       <Navbar
         currentUser={currentUser}
@@ -146,7 +148,7 @@ export default function App() {
       />
 
       {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1 w-full">
         {/* Role Notice for Supervisor */}
         {currentUser?.role === 'supervisor' && (
           <div className="bg-purple-50 border border-purple-200 rounded-2xl p-3.5 flex items-center gap-2 text-xs text-purple-900 shadow-xs">
@@ -349,6 +351,50 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* ========================================================================= */}
+      {/* FOOTER: SYSTEM INFO, COPYRIGHT & DEVELOPER CONTACT */}
+      {/* ========================================================================= */}
+      <footer className="mt-auto border-t border-slate-200/90 bg-white/95 backdrop-blur-md py-6 text-slate-600 shadow-xs print:hidden">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-4">
+          {/* Rights & System Developer Title */}
+          <div className="flex flex-col items-center md:items-start gap-1 text-center md:text-right">
+            <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 text-slate-900 font-bold text-sm">
+              <span>إدارة الأصول والهندسة الطبية © 2026</span>
+              <span className="text-slate-300">|</span>
+              <span className="text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2.5 py-0.5 rounded-full text-[11px] font-semibold">
+                جميع الحقوق محفوظة
+              </span>
+            </div>
+            <p className="text-slate-600 text-xs">
+              إعداد وتنفيذ: <strong className="text-slate-800 font-bold">المهندس إبراهيم هاشم</strong> • تطوير وإدارة النظام
+            </p>
+          </div>
+
+          {/* Contact Details */}
+          <div className="flex flex-wrap items-center justify-center md:justify-end gap-2.5 text-xs">
+            <a
+              href="mailto:ibr2hashim@gmail.com"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-blue-50/80 border border-slate-200 hover:border-blue-200 text-slate-700 hover:text-blue-700 transition-all shadow-2xs group"
+              dir="ltr"
+              title="تواصل عبر البريد الإلكتروني"
+            >
+              <Mail className="w-3.5 h-3.5 text-blue-600 group-hover:scale-110 transition-transform" />
+              <span className="font-medium font-sans">ibr2hashim@gmail.com</span>
+            </a>
+
+            <a
+              href="tel:+967770288572"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-emerald-50/80 border border-slate-200 hover:border-emerald-200 text-slate-700 hover:text-emerald-700 transition-all shadow-2xs group"
+              dir="ltr"
+              title="اتصال أو واتساب"
+            >
+              <Phone className="w-3.5 h-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
+              <span className="font-medium font-sans">+967 770288572</span>
+            </a>
+          </div>
+        </div>
+      </footer>
 
       {/* ========================================================================= */}
       {/* GLOBAL MODALS */}
