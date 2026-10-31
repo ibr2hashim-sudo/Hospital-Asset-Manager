@@ -11,6 +11,9 @@ import {
   AuditItemStatus,
   AuditItemAccessory,
   AuditSessionStatus,
+  AuditType,
+  SurgicalSet,
+  SurgicalInstrument,
 } from '../types';
 import { FirestoreSyncService } from './firestoreSync';
 import JSZip from 'jszip';
@@ -26,6 +29,8 @@ const STORAGE_KEYS = {
   CURRENT_USER: 'asset_mgmt_current_user',
   CATEGORIES: 'asset_mgmt_periodic_categories',
   AUDIT_SESSIONS: 'asset_mgmt_audit_sessions',
+  SURGICAL_SETS: 'asset_mgmt_surgical_sets',
+  SURGICAL_INSTRUMENTS: 'asset_mgmt_surgical_instruments',
 };
 
 // Initial default user: Admin / MAINADMIN
@@ -998,48 +1003,112 @@ export class StorageService {
     return this.getAuditSessions().find((s) => s.id === id);
   }
 
+  static getSurgicalSets(): SurgicalSet[] {
+    const sets = getItem<SurgicalSet[]>(STORAGE_KEYS.SURGICAL_SETS, []);
+    return Array.isArray(sets) ? sets : [];
+  }
+
+  static getSurgicalInstruments(setId?: string): SurgicalInstrument[] {
+    const instruments = getItem<SurgicalInstrument[]>(STORAGE_KEYS.SURGICAL_INSTRUMENTS, []);
+    const valid = Array.isArray(instruments) ? instruments : [];
+    if (setId && setId !== 'all') {
+      return valid.filter((i) => i.setId === setId);
+    }
+    return valid;
+  }
+
   static createAuditSession(
     title: string,
     targetDepartment: string,
     createdBy: User,
     auditedBy: string,
-    notes?: string
+    notes?: string,
+    auditType: AuditType = 'assets',
+    targetSetId?: string
   ): AuditSession {
     const sessions = this.getAuditSessions();
-    const assets = this.getAssets();
+    let initialItems: AuditItem[] = [];
+    let targetSetName: string | undefined = undefined;
 
-    // Filter target assets for this session
-    const targetAssets =
-      targetDepartment && targetDepartment !== 'all'
-        ? assets.filter((a) => a.mainDepartment === targetDepartment)
-        : assets;
+    if (auditType === 'surgical_sets') {
+      const sets = this.getSurgicalSets();
+      let targetSets: SurgicalSet[] = [];
+      if (targetSetId && targetSetId !== 'all') {
+        const found = sets.find((s) => s.id === targetSetId);
+        if (found) {
+          targetSets = [found];
+          targetSetName = found.name;
+        }
+      } else {
+        targetSets = sets;
+      }
 
-    const initialItems: AuditItem[] = targetAssets.map((asset) => ({
-      id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-      assetId: asset.id,
-      customId: asset.customId,
-      deviceName: asset.deviceName,
-      mainDepartment: asset.mainDepartment,
-      subDepartment: asset.subDepartment || '',
-      model: asset.model || '',
-      serialNumber: asset.serialNumber || '',
-      expectedCustodian: asset.custodian || 'غير محدد',
-      expectedQuantity: Number(asset.currentQuantity ?? asset.bookQuantity ?? 1),
-      actualQuantity: 0,
-      status: 'معلق',
-      accessories: Array.isArray(asset.accessories)
-        ? asset.accessories.map((acc) => ({ name: String(acc), checked: false }))
-        : [],
-    }));
+      const allInstruments = this.getSurgicalInstruments();
+
+      targetSets.forEach((set) => {
+        const setInstruments = allInstruments.filter((i) => i.setId === set.id);
+        setInstruments.forEach((inst) => {
+          initialItems.push({
+            id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+            instrumentId: inst.id,
+            setId: set.id,
+            setName: set.name,
+            customId: inst.code,
+            deviceName: inst.name,
+            mainDepartment: set.department || 'العمليات',
+            subDepartment: set.name,
+            model: inst.size || '',
+            serialNumber: set.code,
+            expectedCustodian: set.subLocation || set.department || 'العمليات / التعقيم',
+            expectedQuantity: Number(inst.quantity || 1),
+            actualQuantity: 0,
+            status: 'معلق',
+            actualCondition: inst.status || 'سليم',
+            imageUrl: inst.imageUrl,
+            accessories: [],
+          });
+        });
+      });
+    } else {
+      const assets = this.getAssets();
+      // Filter target assets for this session
+      const targetAssets =
+        targetDepartment && targetDepartment !== 'all'
+          ? assets.filter((a) => a.mainDepartment === targetDepartment)
+          : assets;
+
+      initialItems = targetAssets.map((asset) => ({
+        id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        assetId: asset.id,
+        customId: asset.customId,
+        deviceName: asset.deviceName,
+        mainDepartment: asset.mainDepartment,
+        subDepartment: asset.subDepartment || '',
+        model: asset.model || '',
+        serialNumber: asset.serialNumber || '',
+        expectedCustodian: asset.custodian || 'غير محدد',
+        expectedQuantity: Number(asset.currentQuantity ?? asset.bookQuantity ?? 1),
+        actualQuantity: 0,
+        status: 'معلق',
+        accessories: Array.isArray(asset.accessories)
+          ? asset.accessories.map((acc) => ({ name: String(acc), checked: false }))
+          : [],
+        imageUrl: asset.imageUrl,
+      }));
+    }
 
     const now = new Date();
-    const sessionNumber = `AUD-${now.getFullYear()}-${String(sessions.length + 1).padStart(3, '0')}`;
+    const prefix = auditType === 'surgical_sets' ? 'SET-AUD' : 'AUD';
+    const sessionNumber = `${prefix}-${now.getFullYear()}-${String(sessions.length + 1).padStart(3, '0')}`;
 
     const newSession: AuditSession = {
       id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
       sessionNumber,
       title: title.trim(),
+      auditType,
       targetDepartment: targetDepartment || 'all',
+      targetSetId: targetSetId || 'all',
+      targetSetName,
       status: 'قيد_الجرد',
       startDate: now.toISOString().split('T')[0],
       createdBy: {
@@ -1272,6 +1341,7 @@ export class StorageService {
       if (matchesCandidates(item.serialNumber)) return true;
       if (matchesCandidates(item.id)) return true;
       if (item.assetId && matchesCandidates(item.assetId)) return true;
+      if (item.instrumentId && matchesCandidates(item.instrumentId)) return true;
 
       // Cross-reference with underlying registered asset if serial number was missing in session item
       const refAsset = (item.assetId && assetMapById.get(item.assetId)) || assetMapByCustomId.get(item.customId.trim().toLowerCase());
@@ -1313,16 +1383,84 @@ export class StorageService {
       setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
       FirestoreSyncService.syncAuditSession(session);
 
+      const labelType = session.auditType === 'surgical_sets' ? 'الأداة الجراحية' : 'الجهاز';
       return {
         success: true,
         message: isAlreadyMatched
-          ? `تم تحديث مسح الجهاز: ${item.deviceName} (ID: ${item.customId}${resolvedSerial ? ` / S.N: ${resolvedSerial}` : ''})`
-          : `تم مطابقة الجهاز بنجاح: ${item.deviceName} (ID: ${item.customId}${resolvedSerial ? ` / S.N: ${resolvedSerial}` : ''}) ✅`,
+          ? `تم تحديث مسح ${labelType}: ${item.deviceName} (${item.customId}${resolvedSerial ? ` / ${resolvedSerial}` : ''})`
+          : `تم مطابقة ${labelType} بنجاح: ${item.deviceName} (${item.customId}${resolvedSerial ? ` / ${resolvedSerial}` : ''}) ✅`,
         item: session.items[itemIndex],
       };
     }
 
-    // 2. Check if asset exists in system but belongs to another department or wasn't in target list (Relocated)
+    // 2. Check if surgical instrument from another set
+    if (session.auditType === 'surgical_sets') {
+      const allInstruments = this.getSurgicalInstruments();
+      const allSets = this.getSurgicalSets();
+      const existingInst = allInstruments.find((i) => {
+        if (matchesCandidates(i.code)) return true;
+        if (matchesCandidates(i.id)) return true;
+        return false;
+      });
+
+      if (existingInst) {
+        const sourceSet = allSets.find((s) => s.id === existingInst.setId);
+        const existingRelocatedIdx = session.items.findIndex(
+          (i) => i.instrumentId === existingInst.id || i.customId === existingInst.code
+        );
+
+        if (existingRelocatedIdx !== -1) {
+          session.items[existingRelocatedIdx] = {
+            ...session.items[existingRelocatedIdx],
+            status: 'منقول',
+            actualQuantity: session.items[existingRelocatedIdx].actualQuantity > 0 ? session.items[existingRelocatedIdx].actualQuantity : 1,
+            scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
+            scannedBy: user.fullName,
+            notes: notes || session.items[existingRelocatedIdx].notes || `أداة منقولة من سيت: ${sourceSet?.name || 'سيت آخر'}`,
+          };
+        } else {
+          const relocatedItem: AuditItem = {
+            id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+            instrumentId: existingInst.id,
+            setId: existingInst.setId,
+            setName: sourceSet?.name || 'سيت آخر',
+            customId: existingInst.code,
+            deviceName: existingInst.name,
+            mainDepartment: sourceSet?.department || 'العمليات',
+            subDepartment: sourceSet?.name || '',
+            model: existingInst.size || '',
+            serialNumber: sourceSet?.code || '',
+            expectedCustodian: sourceSet?.department || 'العمليات',
+            expectedQuantity: Number(existingInst.quantity || 1),
+            actualQuantity: 1,
+            status: 'منقول',
+            scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
+            scannedBy: user.fullName,
+            notes: notes || `أداة منقولة من سيت: [${sourceSet?.code || ''}] ${sourceSet?.name || ''}`,
+            actualDepartment: sourceSet?.department || 'العمليات',
+            actualCondition: existingInst.status || 'سليم',
+            imageUrl: existingInst.imageUrl,
+            accessories: [],
+          };
+          session.items.push(relocatedItem);
+        }
+
+        this.recalculateSessionStats(session);
+        session.updatedAt = nowStr;
+        sessions[sessionIndex] = session;
+        setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+        FirestoreSyncService.syncAuditSession(session);
+
+        return {
+          success: true,
+          message: `تنبيه: الأداة الجراحية [${existingInst.name} - ${existingInst.code}] مسجلة بسيت (${sourceSet?.name || 'سيت آخر'}) ورُصدت هنا كأداة منقولة 🔄`,
+          isRelocated: true,
+          item: session.items[session.items.length - 1],
+        };
+      }
+    }
+
+    // 3. Check if asset exists in system but belongs to another department or wasn't in target list (Relocated)
     const existingAsset = allAssets.find((a) => {
       if (matchesCandidates(a.customId)) return true;
       if (matchesCandidates(a.serialNumber)) return true;
@@ -1638,6 +1776,23 @@ export class StorageService {
     FirestoreSyncService.syncAuditSession(session);
   }
 
+  // Update condition for an item (e.g. surgical instrument status)
+  static updateAuditItemCondition(sessionId: string, itemId: string, condition: string): void {
+    const sessions = this.getAuditSessions();
+    const sessionIndex = sessions.findIndex((s) => s.id === sessionId);
+    if (sessionIndex === -1) return;
+
+    const session = sessions[sessionIndex];
+    const itemIndex = session.items.findIndex((i) => i.id === itemId || i.customId === itemId);
+    if (itemIndex === -1) return;
+
+    session.items[itemIndex].actualCondition = condition;
+    session.updatedAt = new Date().toISOString();
+    sessions[sessionIndex] = session;
+    setItem(STORAGE_KEYS.AUDIT_SESSIONS, sessions);
+    FirestoreSyncService.syncAuditSession(session);
+  }
+
   static updateAuditItemStatus(
     sessionId: string,
     itemId: string,
@@ -1817,6 +1972,45 @@ export class StorageService {
       if (updatedAssetsCount > 0) {
         setItem(STORAGE_KEYS.ASSETS, assets);
         window.dispatchEvent(new CustomEvent('assets_updated', { detail: assets }));
+      }
+    }
+
+    // Reconcile Surgical Sets & Instruments if this was a surgical set audit
+    if (session.auditType === 'surgical_sets') {
+      const sets = this.getSurgicalSets();
+      const setIdsInSession = new Set(session.items.map((i) => i.setId).filter(Boolean));
+      let modifiedSets = false;
+      sets.forEach((set) => {
+        if (setIdsInSession.has(set.id) || session.targetSetId === 'all' || session.targetSetId === set.id) {
+          set.lastAuditDate = session.completedDate;
+          modifiedSets = true;
+          FirestoreSyncService.syncSurgicalSet(set).catch(() => {});
+        }
+      });
+      if (modifiedSets) {
+        setItem(STORAGE_KEYS.SURGICAL_SETS, sets);
+      }
+
+      if (applyReconciliationToAssets) {
+        const instruments = this.getSurgicalInstruments();
+        let modifiedInsts = false;
+        session.items.forEach((item) => {
+          const instIdx = instruments.findIndex(
+            (i) => i.id === item.instrumentId || (i.code === item.customId && i.setId === item.setId)
+          );
+          if (instIdx !== -1) {
+            instruments[instIdx].actualQuantity = item.actualQuantity;
+            if (item.status === 'مفقود') {
+              instruments[instIdx].status = 'مفقود';
+            } else if (item.actualCondition) {
+              instruments[instIdx].status = item.actualCondition as any;
+            }
+            modifiedInsts = true;
+          }
+        });
+        if (modifiedInsts) {
+          setItem(STORAGE_KEYS.SURGICAL_INSTRUMENTS, instruments);
+        }
       }
     }
 

@@ -180,6 +180,7 @@ export interface SyncConfig {
 
 export type AuditItemStatus = 'مطابق' | 'مفقود' | 'منقول' | 'جديد_غير_مسجل' | 'معلق';
 export type AuditSessionStatus = 'قيد_الجرد' | 'مكتمل_معتمد' | 'ملغي';
+export type AuditType = 'assets' | 'surgical_sets';
 
 export interface AuditItemAccessory {
   name: string;
@@ -189,6 +190,9 @@ export interface AuditItemAccessory {
 export interface AuditItem {
   id: string;
   assetId?: string;
+  instrumentId?: string;
+  setId?: string;
+  setName?: string;
   customId: string;
   deviceName: string;
   mainDepartment: string;
@@ -199,19 +203,24 @@ export interface AuditItem {
   expectedQuantity: number;
   actualQuantity: number;
   status: AuditItemStatus;
+  actualCondition?: string;
   scannedAt?: string;
   scannedBy?: string;
   notes?: string;
   actualDepartment?: string;
   actualCustodian?: string;
   accessories?: AuditItemAccessory[];
+  imageUrl?: string;
 }
 
 export interface AuditSession {
   id: string;
   sessionNumber: string;
   title: string;
+  auditType?: AuditType; // 'assets' | 'surgical_sets'
   targetDepartment: string; // 'all' or specific mainDepartment
+  targetSetId?: string; // 'all' or specific setId when auditType === 'surgical_sets'
+  targetSetName?: string; // Set name when targetSetId is specific
   status: AuditSessionStatus;
   startDate: string;
   completedDate?: string;

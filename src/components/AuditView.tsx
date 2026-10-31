@@ -33,8 +33,25 @@ import {
   Download,
   Loader2,
   Filter,
+  Folder,
+  FolderArchive,
+  FolderOpen,
+  Scissors,
+  Stethoscope,
+  ChevronLeft,
+  ArrowRight,
 } from 'lucide-react';
-import { Asset, AuditSession, AuditItem, AuditItemStatus, AuditItemAccessory, User } from '../types';
+import {
+  Asset,
+  AuditSession,
+  AuditItem,
+  AuditItemStatus,
+  AuditItemAccessory,
+  User,
+  AuditType,
+  SurgicalSet,
+  SurgicalInstrument,
+} from '../types';
 import { StorageService } from '../services/storage';
 import { BarcodeCameraScanner } from './BarcodeCameraScanner';
 import { PDFReportGenerator } from '../utils/pdfExport';
@@ -53,10 +70,19 @@ export const AuditView: React.FC<AuditViewProps> = ({
   const [sessions, setSessions] = useState<AuditSession[]>(() => StorageService.getAuditSessions());
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
+  // Active track / domain: Medical Assets vs Surgical Sets
+  const [auditDomain, setAuditDomain] = useState<'assets' | 'surgical_sets'>('assets');
+  // View mode within domain: Active Sessions vs Organized Archive Folders
+  const [auditViewMode, setAuditViewMode] = useState<'sessions' | 'archive'>('sessions');
+  // Selected department or surgical set folder in archive mode
+  const [selectedArchiveFolder, setSelectedArchiveFolder] = useState<string | null>(null);
+
   // New session modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newAuditType, setNewAuditType] = useState<AuditType>('assets');
   const [newTitle, setNewTitle] = useState('');
   const [newDept, setNewDept] = useState('all');
+  const [newTargetSetId, setNewTargetSetId] = useState('all');
   const [newAuditedBy, setNewAuditedBy] = useState(currentUser?.fullName || '');
   const [newNotes, setNewNotes] = useState('');
 
@@ -230,6 +256,10 @@ export const AuditView: React.FC<AuditViewProps> = ({
     return Array.from(set).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [assets]);
 
+  // Surgical sets & instruments
+  const surgicalSets = useMemo(() => StorageService.getSurgicalSets(), [sessions]);
+  const surgicalInstruments = useMemo(() => StorageService.getSurgicalInstruments(), [sessions]);
+
   // Guard: Admin and Technician only
   if (currentUser?.role === 'supervisor') {
     return (
@@ -257,16 +287,22 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
     const session = StorageService.createAuditSession(
       newTitle,
-      newDept,
+      newAuditType === 'assets' ? newDept : 'all',
       currentUser,
       newAuditedBy,
-      newNotes
+      newNotes,
+      newAuditType,
+      newAuditType === 'surgical_sets' ? newTargetSetId : undefined
     );
 
     setShowCreateModal(false);
     setNewTitle('');
     setNewDept('all');
+    setNewTargetSetId('all');
     setNewNotes('');
+    setAuditDomain(newAuditType);
+    setAuditViewMode('sessions');
+    setSelectedArchiveFolder(null);
     reloadSessions();
     setSelectedSessionId(session.id);
   };
@@ -611,18 +647,107 @@ export const AuditView: React.FC<AuditViewProps> = ({
   }, [activeSession, itemStatusFilter, itemSearchQuery]);
 
   // Filtered session list
+  // Split sessions by domain
+  const assetSessions = useMemo(
+    () => sessions.filter((s) => !s.auditType || s.auditType === 'assets'),
+    [sessions]
+  );
+  const surgicalSetSessions = useMemo(
+    () => sessions.filter((s) => s.auditType === 'surgical_sets'),
+    [sessions]
+  );
+
+  const currentDomainSessions = useMemo(
+    () => (auditDomain === 'assets' ? assetSessions : surgicalSetSessions),
+    [auditDomain, assetSessions, surgicalSetSessions]
+  );
+
+  // Filtered session list
   const filteredSessions = useMemo(() => {
-    return sessions.filter((s) => {
+    return currentDomainSessions.filter((s) => {
       if (!sessionSearchQuery.trim()) return true;
       const q = sessionSearchQuery.toLowerCase().trim();
       return (
         s.title.toLowerCase().includes(q) ||
         s.sessionNumber.toLowerCase().includes(q) ||
-        s.targetDepartment.toLowerCase().includes(q) ||
+        (s.targetDepartment && s.targetDepartment.toLowerCase().includes(q)) ||
+        (s.targetSetName && s.targetSetName.toLowerCase().includes(q)) ||
         s.auditedBy.toLowerCase().includes(q)
       );
     });
-  }, [sessions, sessionSearchQuery]);
+  }, [currentDomainSessions, sessionSearchQuery]);
+
+  // Department Archive Folders computation (for assets)
+  const departmentArchiveFolders = useMemo(() => {
+    return uniqueDepartments.map((dept) => {
+      const deptSessions = assetSessions.filter(
+        (s) => s.targetDepartment === dept || s.targetDepartment === 'all'
+      );
+      const completedSessions = deptSessions.filter((s) => s.status === 'مكتمل_معتمد');
+      const deptAssets = assets.filter((a) => a.mainDepartment === dept);
+
+      const sessionDates = completedSessions
+        .map((s) => s.completedDate || s.startDate)
+        .filter(Boolean) as string[];
+      const assetAuditDates = deptAssets
+        .map((a) => a.lastAuditDate)
+        .filter(Boolean) as string[];
+      const allDates = [...sessionDates, ...assetAuditDates].sort().reverse();
+      const lastAuditDate = allDates.length > 0 ? allDates[0] : null;
+
+      return {
+        key: dept,
+        name: dept,
+        totalAssets: deptAssets.length,
+        totalSessions: deptSessions.length,
+        completedSessionsCount: completedSessions.length,
+        lastAuditDate,
+        sessions: deptSessions,
+        completedSessions,
+      };
+    });
+  }, [uniqueDepartments, assetSessions, assets]);
+
+  // Surgical Set Archive Folders computation ("يتعامل مع السيتات زي الاقسام")
+  const surgicalSetArchiveFolders = useMemo(() => {
+    return surgicalSets.map((set) => {
+      const setSessions = surgicalSetSessions.filter(
+        (s) => s.targetSetId === set.id || s.targetSetId === 'all' || s.items.some((i) => i.setId === set.id)
+      );
+      const completedSessions = setSessions.filter((s) => s.status === 'مكتمل_معتمد');
+      const setInstruments = surgicalInstruments.filter((i) => i.setId === set.id);
+
+      const sessionDates = completedSessions
+        .map((s) => s.completedDate || s.startDate)
+        .filter(Boolean) as string[];
+      const allDates = [set.lastAuditDate, ...sessionDates].filter(Boolean) as string[];
+      allDates.sort().reverse();
+      const lastAuditDate = allDates.length > 0 ? allDates[0] : null;
+
+      return {
+        key: set.id,
+        code: set.code,
+        name: set.name,
+        department: set.department || 'العمليات',
+        totalInstruments: setInstruments.length || set.instrumentsCount || 0,
+        totalSessions: setSessions.length,
+        completedSessionsCount: completedSessions.length,
+        lastAuditDate,
+        sessions: setSessions,
+        completedSessions,
+      };
+    });
+  }, [surgicalSets, surgicalSetSessions, surgicalInstruments]);
+
+  // Active folder details when selectedArchiveFolder is chosen
+  const activeArchiveFolderData = useMemo(() => {
+    if (!selectedArchiveFolder) return null;
+    if (auditDomain === 'assets') {
+      return departmentArchiveFolders.find((f) => f.key === selectedArchiveFolder) || null;
+    } else {
+      return surgicalSetArchiveFolders.find((f) => f.key === selectedArchiveFolder) || null;
+    }
+  }, [selectedArchiveFolder, auditDomain, departmentArchiveFolders, surgicalSetArchiveFolders]);
 
   // Status Badge Helper
   const renderStatusBadge = (status: AuditItemStatus) => {
@@ -684,7 +809,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
               </span>
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              إدخال الكميات الفعلية، فحص التوابع، إضافة أجهزة جديدة أثناء الجرد، وتصدير التقارير الرسمية بالعرض (Landscape)
+              جرد ومطابقة الأجهزة والعهد الطبية، جرد السيتات الجراحية، والأرشيف المنظم حسب الأقسام والسيتات
             </p>
           </div>
         </div>
@@ -700,170 +825,599 @@ export const AuditView: React.FC<AuditViewProps> = ({
           )}
 
           <button
-            onClick={() => setShowCreateModal(true)}
+            onClick={() => {
+              setNewAuditType(auditDomain);
+              setShowCreateModal(true);
+            }}
             className="flex-1 md:flex-none flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-md shadow-emerald-600/20 transition-all hover:scale-[1.02]"
           >
             <Plus className="w-4 h-4" />
-            بدء دورة جرد جديدة
+            {auditDomain === 'surgical_sets' ? 'بدء جرد سيت جديد' : 'بدء دورة جرد جديدة'}
           </button>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* 1. SESSIONS LIST (When No Session is Selected) */}
+      {/* 1. SESSIONS & ARCHIVE DASHBOARD (When No Session is Selected) */}
       {/* ========================================================================= */}
       {!selectedSessionId && (
-        <div className="space-y-4">
-          {/* Search and Filters */}
-          <div className="flex items-center gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs">
-            <div className="relative flex-1">
+        <div className="space-y-5">
+          {/* Top Track Selector: Assets Audit vs Surgical Sets Audit */}
+          <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuditDomain('assets');
+                  setSelectedArchiveFolder(null);
+                }}
+                className={`flex items-center justify-between p-3.5 rounded-xl border-2 transition-all text-right ${
+                  auditDomain === 'assets'
+                    ? 'border-emerald-600 bg-emerald-50/50 shadow-xs'
+                    : 'border-transparent hover:bg-slate-50 text-slate-600'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold ${
+                      auditDomain === 'assets'
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    <Stethoscope className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-slate-900">جرد الأجهزة والعهد الطبية</div>
+                    <div className="text-[11px] text-slate-500">جرد الأجهزة والمعدات حسب الأقسام المستهدفة</div>
+                  </div>
+                </div>
+                <span
+                  className={`text-xs px-2.5 py-1 rounded-full font-bold ${
+                    auditDomain === 'assets'
+                      ? 'bg-emerald-200/80 text-emerald-900 font-black'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {assetSessions.length} دورة
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAuditDomain('surgical_sets');
+                  setSelectedArchiveFolder(null);
+                }}
+                className={`flex items-center justify-between p-3.5 rounded-xl border-2 transition-all text-right ${
+                  auditDomain === 'surgical_sets'
+                    ? 'border-indigo-600 bg-indigo-50/50 shadow-xs'
+                    : 'border-transparent hover:bg-slate-50 text-slate-600'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold ${
+                      auditDomain === 'surgical_sets'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    <Scissors className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-slate-900">جرد السيتات الجراحية</div>
+                    <div className="text-[11px] text-slate-500">جرد ومطابقة الأدوات داخل السيتات وحاويات التعقيم</div>
+                  </div>
+                </div>
+                <span
+                  className={`text-xs px-2.5 py-1 rounded-full font-bold ${
+                    auditDomain === 'surgical_sets'
+                      ? 'bg-indigo-200/80 text-indigo-900 font-black'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {surgicalSetSessions.length} دورة
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Sub Navigation: Active / Current Sessions vs Organized Archive Folders */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-2.5 rounded-2xl border border-slate-200 shadow-xs">
+            <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuditViewMode('sessions');
+                  setSelectedArchiveFolder(null);
+                }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+                  auditViewMode === 'sessions'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <ClipboardCheck className="w-4 h-4 text-emerald-600" />
+                <span>الدورات الحالية والنشطة</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-700 font-mono">
+                  {currentDomainSessions.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAuditViewMode('archive');
+                  setSelectedArchiveFolder(null);
+                }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+                  auditViewMode === 'archive'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <FolderArchive className="w-4 h-4 text-amber-600" />
+                <span>
+                  {auditDomain === 'assets' ? 'مجلدات أرشيف الأقسام' : 'مجلدات أرشيف السيتات'}
+                </span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-amber-100 text-amber-800 font-bold">
+                  {auditDomain === 'assets' ? departmentArchiveFolders.length : surgicalSetArchiveFolders.length}
+                </span>
+              </button>
+            </div>
+
+            {/* Quick search input */}
+            <div className="relative sm:w-80">
               <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 value={sessionSearchQuery}
                 onChange={(e) => setSessionSearchQuery(e.target.value)}
-                placeholder="البحث في دورات الجرد (الرقم، العنوان، القسم، الفاحص)..."
+                placeholder={
+                  auditDomain === 'assets'
+                    ? 'بحث في دورات الأجهزة (الرقم، العنوان، القسم)...'
+                    : 'بحث في دورات السيتات (الرقم، العنوان، السيت)...'
+                }
                 className="w-full pl-3 pr-9 py-2 text-xs rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-emerald-500 focus:outline-none transition-all"
               />
             </div>
-            <div className="text-xs text-slate-500 font-semibold px-2">
-              إجمالي الدورات: {sessions.length}
-            </div>
           </div>
 
-          {filteredSessions.length === 0 ? (
-            <div className="bg-white rounded-3xl p-12 border border-slate-200 text-center space-y-4 shadow-xs">
-              <div className="w-16 h-16 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
-                <ClipboardCheck className="w-8 h-8" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-800">لا توجد دورات جرد حالياً</h3>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
-                ابدأ بإنشاء دورة جرد جديدة لاختيار قسم معين أو كافة الأقسام، ثم ابدأ بمسح الأجهزة عبر الباركود وإدخال الكميات وفحص التوابع.
-              </p>
-              <button
-                onClick={() => setShowCreateModal(true)}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition-all"
-              >
-                <Plus className="w-4 h-4" />
-                بدء أول دورة جرد
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredSessions.map((session) => {
-                const completionRate =
-                  session.totalExpected > 0
-                    ? Math.min(100, Math.round(((session.totalMatched + session.totalRelocated) / session.totalExpected) * 100))
-                    : 0;
-
-                const isCompleted = session.status === 'مكتمل_معتمد';
-
-                return (
-                  <div
-                    key={session.id}
-                    onClick={() => setSelectedSessionId(session.id)}
-                    className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs hover:shadow-md hover:border-emerald-500/50 transition-all cursor-pointer flex flex-col justify-between group"
+          {/* ========================================================================= */}
+          {/* VIEW MODE A: CURRENT SESSIONS LIST */}
+          {/* ========================================================================= */}
+          {auditViewMode === 'sessions' && (
+            <div>
+              {filteredSessions.length === 0 ? (
+                <div className="bg-white rounded-3xl p-12 border border-slate-200 text-center space-y-4 shadow-xs">
+                  <div className="w-16 h-16 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                    {auditDomain === 'assets' ? (
+                      <Stethoscope className="w-8 h-8" />
+                    ) : (
+                      <Scissors className="w-8 h-8 text-indigo-600" />
+                    )}
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-800">
+                    {auditDomain === 'assets'
+                      ? 'لا توجد دورات جرد أجهزة مسجلة حالياً'
+                      : 'لا توجد دورات جرد سيتات جراحية مسجلة حالياً'}
+                  </h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    {auditDomain === 'assets'
+                      ? 'ابدأ بإنشاء دورة جرد جديدة لاختيار قسم معين أو كافة الأقسام للبدء بمسح الأجهزة ومطابقتها.'
+                      : 'ابدأ بإنشاء دورة جرد جديدة لاختيار سيت جراحي معين أو كافة السيتات لفحص الأدوات ومطابقتها.'}
+                  </p>
+                  <button
+                    onClick={() => {
+                      setNewAuditType(auditDomain);
+                      setShowCreateModal(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition-all"
                   >
-                    <div>
-                      {/* Card Header */}
-                      <div className="flex items-start justify-between gap-2 mb-3">
-                        <div>
-                          <span className="text-[11px] font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                            {session.sessionNumber}
-                          </span>
-                          <h3 className="text-base font-bold text-slate-900 mt-1.5 group-hover:text-emerald-700 transition-colors">
-                            {session.title}
-                          </h3>
-                        </div>
-                        <span
-                          className={`text-xs px-2.5 py-1 rounded-full font-bold whitespace-nowrap ${
-                            isCompleted
-                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                              : 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse'
-                          }`}
-                        >
-                          {isCompleted ? 'مكتمل ومعتمد ✅' : 'قيد الجرد والمطابقة ⏳'}
-                        </span>
-                      </div>
+                    <Plus className="w-4 h-4" />
+                    {auditDomain === 'assets' ? 'بدء أول دورة جرد أجهزة' : 'بدء أول دورة جرد سيتات'}
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredSessions.map((session) => {
+                    const completionRate =
+                      session.totalExpected > 0
+                        ? Math.min(
+                            100,
+                            Math.round(
+                              ((session.totalMatched + session.totalRelocated) / session.totalExpected) * 100
+                            )
+                          )
+                        : 0;
 
-                      {/* Meta information */}
-                      <div className="space-y-1.5 text-xs text-slate-600 mb-4 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500">القسم المستهدف:</span>
-                          <span className="font-bold text-slate-800">
-                            {session.targetDepartment === 'all' ? 'جميع الأقسام' : session.targetDepartment}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500">تاريخ البدء:</span>
-                          <span className="font-medium text-slate-700">{session.startDate}</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500">القائم بالجرد:</span>
-                          <span className="font-medium text-slate-700">{session.auditedBy}</span>
-                        </div>
-                      </div>
+                    const isCompleted = session.status === 'مكتمل_معتمد';
+                    const isSurgical = session.auditType === 'surgical_sets';
 
-                      {/* Progress Bar */}
-                      <div className="space-y-1 mb-4">
-                        <div className="flex justify-between text-xs font-bold text-slate-700">
-                          <span>نسبة الإنجاز</span>
-                          <span>{completionRate}%</span>
-                        </div>
-                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all duration-500 ${
-                              isCompleted ? 'bg-emerald-500' : 'bg-blue-600'
-                            }`}
-                            style={{ width: `${completionRate}%` }}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Stats Pills Grid */}
-                      <div className="grid grid-cols-4 gap-1.5 text-center text-[10px] font-bold mb-4">
-                        <div className="bg-slate-100 p-1.5 rounded-lg">
-                          <div className="text-slate-500">المتوقع</div>
-                          <div className="text-slate-800 text-xs mt-0.5">{session.totalExpected}</div>
-                        </div>
-                        <div className="bg-emerald-50 p-1.5 rounded-lg border border-emerald-200">
-                          <div className="text-emerald-700">مطابق</div>
-                          <div className="text-emerald-800 text-xs mt-0.5">{session.totalMatched}</div>
-                        </div>
-                        <div className="bg-amber-50 p-1.5 rounded-lg border border-amber-200">
-                          <div className="text-amber-700">منقول</div>
-                          <div className="text-amber-800 text-xs mt-0.5">{session.totalRelocated}</div>
-                        </div>
-                        <div className="bg-blue-50 p-1.5 rounded-lg border border-blue-200">
-                          <div className="text-blue-700">جديد</div>
-                          <div className="text-blue-800 text-xs mt-0.5">{session.totalUnregistered}</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Card Footer Actions */}
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-100 gap-2">
-                      <button
+                    return (
+                      <div
+                        key={session.id}
                         onClick={() => setSelectedSessionId(session.id)}
-                        className="flex-1 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-colors flex items-center justify-center gap-1.5"
+                        className={`bg-white rounded-2xl p-5 border shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between group ${
+                          isSurgical
+                            ? 'border-indigo-100 hover:border-indigo-400'
+                            : 'border-slate-200/80 hover:border-emerald-500/50'
+                        }`}
                       >
-                        <Eye className="w-3.5 h-3.5" />
-                        {isCompleted ? 'عرض المحضر والتقرير العرضي' : 'متابعة مسح وإدخال الجرد'}
-                      </button>
+                        <div>
+                          {/* Card Header */}
+                          <div className="flex items-start justify-between gap-2 mb-3">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-md border ${
+                                    isSurgical
+                                      ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                                      : 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                                  }`}
+                                >
+                                  {session.sessionNumber}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                    isSurgical
+                                      ? 'bg-purple-100 text-purple-800'
+                                      : 'bg-emerald-100 text-emerald-800'
+                                  }`}
+                                >
+                                  {isSurgical ? '✂️ سيتات' : '🩺 أجهزة'}
+                                </span>
+                              </div>
+                              <h3 className="text-base font-bold text-slate-900 mt-1.5 group-hover:text-emerald-700 transition-colors">
+                                {session.title}
+                              </h3>
+                            </div>
+                            <span
+                              className={`text-xs px-2.5 py-1 rounded-full font-bold whitespace-nowrap ${
+                                isCompleted
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse'
+                              }`}
+                            >
+                              {isCompleted ? 'مكتمل ومعتمد ✅' : 'قيد الجرد والمطابقة ⏳'}
+                            </span>
+                          </div>
 
-                      {currentUser?.role === 'admin' && (
-                        <button
-                          onClick={(e) => handleDeleteSession(session.id, e)}
-                          title="حذف جلسة الجرد"
-                          className="p-2 rounded-xl text-red-600 hover:bg-red-50 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
+                          {/* Meta information */}
+                          <div className="space-y-1.5 text-xs text-slate-600 mb-4 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-500">
+                                {isSurgical ? 'السيت المستهدف:' : 'القسم المستهدف:'}
+                              </span>
+                              <span className="font-bold text-slate-800">
+                                {isSurgical
+                                  ? session.targetSetName ||
+                                    (session.targetSetId === 'all' ? 'كافة السيتات الجراحية' : 'سيت محدد')
+                                  : session.targetDepartment === 'all'
+                                  ? 'جميع الأقسام'
+                                  : session.targetDepartment}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-500">تاريخ البدء:</span>
+                              <span className="font-medium text-slate-700">{session.startDate}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-500">القائم بالجرد:</span>
+                              <span className="font-medium text-slate-700">{session.auditedBy}</span>
+                            </div>
+                          </div>
+
+                          {/* Progress Bar */}
+                          <div className="space-y-1 mb-4">
+                            <div className="flex justify-between text-xs font-bold text-slate-700">
+                              <span>نسبة الإنجاز</span>
+                              <span>{completionRate}%</span>
+                            </div>
+                            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full transition-all duration-500 ${
+                                  isCompleted ? 'bg-emerald-500' : isSurgical ? 'bg-indigo-600' : 'bg-blue-600'
+                                }`}
+                                style={{ width: `${completionRate}%` }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Stats Pills Grid */}
+                          <div className="grid grid-cols-4 gap-1.5 text-center text-[10px] font-bold mb-4">
+                            <div className="bg-slate-100 p-1.5 rounded-lg">
+                              <div className="text-slate-500">المتوقع</div>
+                              <div className="text-slate-800 text-xs mt-0.5">{session.totalExpected}</div>
+                            </div>
+                            <div className="bg-emerald-50 p-1.5 rounded-lg border border-emerald-200">
+                              <div className="text-emerald-700">مطابق</div>
+                              <div className="text-emerald-800 text-xs mt-0.5">{session.totalMatched}</div>
+                            </div>
+                            <div className="bg-amber-50 p-1.5 rounded-lg border border-amber-200">
+                              <div className="text-amber-700">منقول</div>
+                              <div className="text-amber-800 text-xs mt-0.5">{session.totalRelocated}</div>
+                            </div>
+                            <div className="bg-blue-50 p-1.5 rounded-lg border border-blue-200">
+                              <div className="text-blue-700">{isSurgical ? 'فائض' : 'جديد'}</div>
+                              <div className="text-blue-800 text-xs mt-0.5">{session.totalUnregistered}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Card Footer Actions */}
+                        <div className="flex items-center justify-between pt-3 border-t border-slate-100 gap-2">
+                          <button
+                            onClick={() => setSelectedSessionId(session.id)}
+                            className="flex-1 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-colors flex items-center justify-center gap-1.5"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            {isCompleted ? 'عرض المحضر والتقرير العرضي' : 'متابعة مسح وإدخال الجرد'}
+                          </button>
+
+                          {currentUser?.role === 'admin' && (
+                            <button
+                              onClick={(e) => handleDeleteSession(session.id, e)}
+                              title="حذف جلسة الجرد"
+                              className="p-2 rounded-xl text-red-600 hover:bg-red-50 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* VIEW MODE B: ORGANIZED ARCHIVE FOLDERS */}
+          {/* ========================================================================= */}
+          {auditViewMode === 'archive' && (
+            <div className="space-y-4">
+              {/* If no specific folder selected: show all folders */}
+              {!selectedArchiveFolder ? (
+                <div className="space-y-4">
+                  <div className="bg-gradient-to-l from-slate-900 to-slate-800 text-white p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold">
+                        <FolderArchive className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-base font-bold">
+                          {auditDomain === 'assets'
+                            ? 'أرشيف جرد الأجهزة المنظم حسب الأقسام'
+                            : 'أرشيف جرد السيتات المنظم حسب السيتات الجراحية'}
+                        </h2>
+                        <p className="text-xs text-slate-300">
+                          {auditDomain === 'assets'
+                            ? 'انقر على أي مجلد قسم لاستعراض كافة محاضر ودورات الجرد المعتمدة الخاصة به عبر التاريخ'
+                            : 'يتعامل مع كل سيت جراحي كمجلد مستقل لاستعراض كافة محاضر الجرد وتاريخ تدقيق أدواته'}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                );
-              })}
+
+                  {/* Folders Grid for Assets (Departments) */}
+                  {auditDomain === 'assets' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {departmentArchiveFolders.map((folder) => (
+                        <div
+                          key={folder.key}
+                          onClick={() => setSelectedArchiveFolder(folder.key)}
+                          className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs hover:shadow-md hover:border-amber-500/60 transition-all cursor-pointer group flex flex-col justify-between"
+                        >
+                          <div>
+                            <div className="flex items-start justify-between gap-3 mb-3">
+                              <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200/80 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                <Folder className="w-6 h-6 fill-amber-100" />
+                              </div>
+                              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">
+                                {folder.completedSessionsCount} محضر معتمد
+                              </span>
+                            </div>
+
+                            <h3 className="text-base font-bold text-slate-900 group-hover:text-amber-700 transition-colors">
+                              قسم: {folder.name}
+                            </h3>
+                            <p className="text-xs text-slate-500 mt-1">
+                              إجمالي الأصول المسجلة: <strong className="text-slate-800">{folder.totalAssets}</strong> جهاز
+                            </p>
+
+                            <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] text-slate-500 flex items-center justify-between">
+                              <span>آخر جرد معتمد:</span>
+                              <span className="font-bold text-slate-700 font-mono">
+                                {folder.lastAuditDate || 'لم يتم الجرد بعد'}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 flex items-center justify-between text-xs font-bold text-amber-700 group-hover:text-amber-800 pt-2">
+                            <span>فتح أرشيف هذا القسم</span>
+                            <ArrowRight className="w-4 h-4 transform group-hover:-translate-x-1 transition-transform" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Folders Grid for Surgical Sets (Sets) - "يتعامل مع السيتات زي الاقسام" */}
+                  {auditDomain === 'surgical_sets' && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {surgicalSetArchiveFolders.map((folder) => (
+                        <div
+                          key={folder.key}
+                          onClick={() => setSelectedArchiveFolder(folder.key)}
+                          className="bg-white rounded-2xl p-5 border border-indigo-100 shadow-xs hover:shadow-md hover:border-indigo-400 transition-all cursor-pointer group flex flex-col justify-between"
+                        >
+                          <div>
+                            <div className="flex items-start justify-between gap-3 mb-3">
+                              <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 border border-indigo-200/80 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                <Folder className="w-6 h-6 fill-indigo-100" />
+                              </div>
+                              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                {folder.completedSessionsCount} محضر معتمد
+                              </span>
+                            </div>
+
+                            <div className="text-[11px] font-mono font-bold text-indigo-600">{folder.code}</div>
+                            <h3 className="text-base font-bold text-slate-900 group-hover:text-indigo-700 transition-colors mt-0.5">
+                              {folder.name}
+                            </h3>
+                            <div className="text-xs text-slate-500 mt-1 flex items-center justify-between">
+                              <span>القسم: {folder.department}</span>
+                              <span>الأدوات: <strong className="text-slate-800">{folder.totalInstruments}</strong></span>
+                            </div>
+
+                            <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] text-slate-500 flex items-center justify-between">
+                              <span>آخر تدقيق:</span>
+                              <span className="font-bold text-slate-700 font-mono">
+                                {folder.lastAuditDate || 'لم يتم التدقيق بعد'}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="mt-4 flex items-center justify-between text-xs font-bold text-indigo-700 group-hover:text-indigo-800 pt-2">
+                            <span>فتح أرشيف هذا السيت</span>
+                            <ArrowRight className="w-4 h-4 transform group-hover:-translate-x-1 transition-transform" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Inside a selected Folder: Drilldown View */
+                <div className="space-y-4">
+                  {/* Folder Breadcrumb & Header */}
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedArchiveFolder(null)}
+                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                      >
+                        <ChevronLeft className="w-4 h-4 rotate-180" />
+                        <span>العودة إلى كافة المجلدات</span>
+                      </button>
+
+                      <div className="h-6 w-px bg-slate-200" />
+
+                      <div className="flex items-center gap-2">
+                        <FolderOpen className="w-5 h-5 text-amber-600" />
+                        <div>
+                          <div className="text-xs text-slate-400 font-bold">
+                            {auditDomain === 'assets' ? 'مجلد أرشيف قسم' : 'مجلد أرشيف سيت جراحي'}
+                          </div>
+                          <div className="text-base font-bold text-slate-900">
+                            {activeArchiveFolderData?.name}
+                            {'code' in (activeArchiveFolderData || {}) && (
+                              <span className="text-xs font-mono text-indigo-600 mr-2">
+                                [{(activeArchiveFolderData as any).code}]
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-slate-500 font-semibold">
+                      عدد المحاضر المتاحة: <strong className="text-slate-900">{activeArchiveFolderData?.sessions.length || 0}</strong> محضر
+                    </div>
+                  </div>
+
+                  {/* Sessions inside this folder */}
+                  {(!activeArchiveFolderData || activeArchiveFolderData.sessions.length === 0) ? (
+                    <div className="bg-white rounded-3xl p-12 border border-slate-200 text-center space-y-4 shadow-xs">
+                      <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
+                        <FolderArchive className="w-8 h-8" />
+                      </div>
+                      <h3 className="text-base font-bold text-slate-800">
+                        لا توجد محاضر جرد مؤرشفة لهذا المجلد حتى الآن
+                      </h3>
+                      <p className="text-xs text-slate-500 max-w-md mx-auto">
+                        بمجرد بدء دورة جرد جديدة وتأكيد اعتمادها نهائياً، ستظهر وثائق المحاضر الرسمية هنا بشكل مؤتمت وتاريخي.
+                      </p>
+                      <button
+                        onClick={() => {
+                          setNewAuditType(auditDomain);
+                          if (auditDomain === 'assets') {
+                            setNewDept(activeArchiveFolderData?.name || 'all');
+                          } else {
+                            setNewTargetSetId(activeArchiveFolderData?.key || 'all');
+                          }
+                          setShowCreateModal(true);
+                        }}
+                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition-all"
+                      >
+                        <Plus className="w-4 h-4" />
+                        بدء دورة جرد لهذا المجلد
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {activeArchiveFolderData.sessions.map((session) => {
+                        const isCompleted = session.status === 'مكتمل_معتمد';
+                        return (
+                          <div
+                            key={session.id}
+                            onClick={() => setSelectedSessionId(session.id)}
+                            className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs hover:shadow-md hover:border-emerald-500 transition-all cursor-pointer flex flex-col justify-between group"
+                          >
+                            <div>
+                              <div className="flex items-start justify-between gap-2 mb-2">
+                                <span className="text-[11px] font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                                  {session.sessionNumber}
+                                </span>
+                                <span
+                                  className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
+                                    isCompleted
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : 'bg-amber-100 text-amber-800'
+                                  }`}
+                                >
+                                  {isCompleted ? 'محضر معتمد ومؤرشف ✅' : 'مسودة قيد الجرد ⏳'}
+                                </span>
+                              </div>
+
+                              <h4 className="text-base font-bold text-slate-900 group-hover:text-emerald-700 transition-colors">
+                                {session.title}
+                              </h4>
+
+                              <div className="mt-3 bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-xs space-y-1 text-slate-600">
+                                <div className="flex justify-between">
+                                  <span>تاريخ الجرد:</span>
+                                  <strong className="text-slate-800">{session.completedDate || session.startDate}</strong>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>القائم بالجرد:</span>
+                                  <strong className="text-slate-800">{session.auditedBy}</strong>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>الأجهزة / الأدوات المشمولة:</span>
+                                  <strong className="text-slate-800">{session.items.length}</strong>
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => setSelectedSessionId(session.id)}
+                              className="mt-4 w-full py-2.5 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition-colors flex items-center justify-center gap-1.5"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>استعراض المحضر وطباعة التقرير</span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -892,7 +1446,26 @@ export const AuditView: React.FC<AuditViewProps> = ({
                     {activeSession.status === 'مكتمل_معتمد' ? 'محضر معتمد ومغلق' : 'جلسة جرد نشطة ومفتوحة'}
                   </span>
                   <span className="text-xs text-slate-400 font-medium">
-                    القسم المستهدف: <strong className="text-white">{activeSession.targetDepartment === 'all' ? 'كافة الأقسام' : activeSession.targetDepartment}</strong>
+                    {activeSession.auditType === 'surgical_sets' ? (
+                      <>
+                        السيت الجراحي المستهدف:{' '}
+                        <strong className="text-white">
+                          {activeSession.targetSetName ||
+                            (activeSession.targetSetId === 'all'
+                              ? 'كافة السيتات الجراحية'
+                              : 'سيت محدد')}
+                        </strong>
+                      </>
+                    ) : (
+                      <>
+                        القسم المستهدف:{' '}
+                        <strong className="text-white">
+                          {activeSession.targetDepartment === 'all'
+                            ? 'كافة الأقسام'
+                            : activeSession.targetDepartment}
+                        </strong>
+                      </>
+                    )}
                   </span>
                 </div>
 
@@ -1231,13 +1804,25 @@ export const AuditView: React.FC<AuditViewProps> = ({
                   <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-bold">
                     <tr>
                       <th className="p-3">#</th>
-                      <th className="p-3">كود الجهاز (ID)</th>
-                      <th className="p-3">اسم الجهاز والموديل</th>
-                      <th className="p-3">القسم والعهدة</th>
-                      <th className="p-3 text-center">الكمية الدفترية</th>
-                      <th className="p-3 text-center">الكمية الفعلية (المحصورة)</th>
+                      <th className="p-3">
+                        {activeSession.auditType === 'surgical_sets' ? 'كود الأداة' : 'كود الجهاز (ID)'}
+                      </th>
+                      <th className="p-3">
+                        {activeSession.auditType === 'surgical_sets' ? 'اسم الأداة والمقاس' : 'اسم الجهاز والموديل'}
+                      </th>
+                      <th className="p-3">
+                        {activeSession.auditType === 'surgical_sets' ? 'السيت الجراحي التابع له' : 'القسم والعهدة'}
+                      </th>
+                      <th className="p-3 text-center">
+                        {activeSession.auditType === 'surgical_sets' ? 'العدد بالسيت (دفتري)' : 'الكمية الدفترية'}
+                      </th>
+                      <th className="p-3 text-center">
+                        {activeSession.auditType === 'surgical_sets' ? 'العدد الفعلي المحصور' : 'الكمية الفعلية (المحصورة)'}
+                      </th>
                       <th className="p-3 text-center">الفارق</th>
-                      <th className="p-3 text-center">فحص التوابع والملحقات</th>
+                      <th className="p-3 text-center">
+                        {activeSession.auditType === 'surgical_sets' ? 'حالة الأداة الفنية' : 'فحص التوابع والملحقات'}
+                      </th>
                       <th className="p-3 text-center">حالة الجرد</th>
                       <th className="p-3">الملاحظات</th>
                       {activeSession.status !== 'مكتمل_معتمد' && (
@@ -1289,12 +1874,25 @@ export const AuditView: React.FC<AuditViewProps> = ({
                               </div>
                             </td>
                             <td className="p-3 text-slate-700">
-                              <div className="font-semibold text-slate-800">
-                                {item.actualDepartment || item.mainDepartment}
-                              </div>
-                              <div className="text-[10px] text-slate-500">
-                                العهدة: {item.actualCustodian || item.expectedCustodian || 'غير محدد'}
-                              </div>
+                              {activeSession.auditType === 'surgical_sets' ? (
+                                <div>
+                                  <div className="font-semibold text-slate-800">
+                                    {item.setName || item.subDepartment || item.mainDepartment || 'سيت جراحي'}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 font-mono">
+                                    كود السيت: {item.serialNumber || '-'}
+                                  </div>
+                                </div>
+                              ) : (
+                                <div>
+                                  <div className="font-semibold text-slate-800">
+                                    {item.actualDepartment || item.mainDepartment}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">
+                                    العهدة: {item.actualCustodian || item.expectedCustodian || 'غير محدد'}
+                                  </div>
+                                </div>
+                              )}
                             </td>
 
                             {/* Expected Quantity */}
@@ -1354,31 +1952,73 @@ export const AuditView: React.FC<AuditViewProps> = ({
                               </span>
                             </td>
 
-                            {/* Accessories Inspection Button */}
+                            {/* Accessories Inspection Button OR Instrument Condition Select */}
                             <td className="p-3 text-center">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setEditingAccessoriesItem({
-                                    id: item.id,
-                                    customId: item.customId,
-                                    deviceName: item.deviceName,
-                                    accessories: item.accessories ? [...item.accessories] : [],
-                                  })
-                                }
-                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition-colors border ${
-                                  accessoriesCount === 0
-                                    ? 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                                    : checkedAccessoriesCount === accessoriesCount
-                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-                                    : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
-                                }`}
-                              >
-                                <Box className="w-3.5 h-3.5" />
-                                {accessoriesCount === 0
-                                  ? 'إضافة توابع +'
-                                  : `التوابع (${checkedAccessoriesCount}/${accessoriesCount})`}
-                              </button>
+                              {activeSession.auditType === 'surgical_sets' ? (
+                                <div className="inline-flex items-center">
+                                  {activeSession.status === 'مكتمل_معتمد' ? (
+                                    <span
+                                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border ${
+                                        item.actualCondition === 'سليم'
+                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                          : item.actualCondition === 'يحتاج سن'
+                                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                          : 'bg-red-50 text-red-800 border-red-200'
+                                      }`}
+                                    >
+                                      {item.actualCondition || 'سليم'}
+                                    </span>
+                                  ) : (
+                                    <select
+                                      value={item.actualCondition || 'سليم'}
+                                      onChange={(e) => {
+                                        StorageService.updateAuditItemCondition(
+                                          activeSession.id,
+                                          item.id,
+                                          e.target.value
+                                        );
+                                        reloadSessions();
+                                      }}
+                                      className={`px-2 py-1 rounded-xl text-[11px] font-bold border cursor-pointer focus:outline-none ${
+                                        (item.actualCondition || 'سليم') === 'سليم'
+                                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                          : item.actualCondition === 'يحتاج سن'
+                                          ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                          : 'bg-red-50 text-red-800 border-red-300'
+                                      }`}
+                                    >
+                                      <option value="سليم">سليم ✅</option>
+                                      <option value="يحتاج سن">يحتاج سن ⚠️</option>
+                                      <option value="تالف">تالف ❌</option>
+                                      <option value="مستبعد">مستبعد 🚫</option>
+                                    </select>
+                                  )}
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditingAccessoriesItem({
+                                      id: item.id,
+                                      customId: item.customId,
+                                      deviceName: item.deviceName,
+                                      accessories: item.accessories ? [...item.accessories] : [],
+                                    })
+                                  }
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold transition-colors border ${
+                                    accessoriesCount === 0
+                                      ? 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                                      : checkedAccessoriesCount === accessoriesCount
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                                      : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+                                  }`}
+                                >
+                                  <Box className="w-3.5 h-3.5" />
+                                  {accessoriesCount === 0
+                                    ? 'إضافة توابع +'
+                                    : `التوابع (${checkedAccessoriesCount}/${accessoriesCount})`}
+                                </button>
+                              )}
                             </td>
 
                             {/* Status Badge */}
@@ -1463,12 +2103,28 @@ export const AuditView: React.FC<AuditViewProps> = ({
           <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl border border-slate-100 text-right space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
-                  <ClipboardCheck className="w-5 h-5" />
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold ${
+                    newAuditType === 'surgical_sets'
+                      ? 'bg-indigo-100 text-indigo-700'
+                      : 'bg-emerald-100 text-emerald-700'
+                  }`}
+                >
+                  {newAuditType === 'surgical_sets' ? (
+                    <Scissors className="w-5 h-5" />
+                  ) : (
+                    <ClipboardCheck className="w-5 h-5" />
+                  )}
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">بدء دورة جرد جديدة</h3>
-                  <p className="text-xs text-slate-500">اختر القسم المستهدف وأنشئ جلسة المطابقة</p>
+                  <h3 className="text-base font-bold text-slate-900">
+                    {newAuditType === 'surgical_sets' ? 'بدء دورة جرد سيتات جراحية' : 'بدء دورة جرد أجهزة وعهد'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {newAuditType === 'surgical_sets'
+                      ? 'اختر السيت الجراحي المستهدف للبدء بمطابقة الأدوات'
+                      : 'اختر القسم المستهدف وأنشئ جلسة المطابقة'}
+                  </p>
                 </div>
               </div>
               <button
@@ -1476,6 +2132,44 @@ export const AuditView: React.FC<AuditViewProps> = ({
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
               >
                 <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Track Switcher Pills */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setNewAuditType('assets');
+                  if (!newTitle || newTitle.includes('سيت')) {
+                    setNewTitle('');
+                  }
+                }}
+                className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all ${
+                  newAuditType === 'assets'
+                    ? 'bg-white text-emerald-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Stethoscope className="w-4 h-4" />
+                <span>جرد الأجهزة والعهد</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNewAuditType('surgical_sets');
+                  if (!newTitle || newTitle.includes('أجهزة')) {
+                    setNewTitle('');
+                  }
+                }}
+                className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs transition-all ${
+                  newAuditType === 'surgical_sets'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Scissors className="w-4 h-4" />
+                <span>جرد السيتات الجراحية</span>
               </button>
             </div>
 
@@ -1488,32 +2182,59 @@ export const AuditView: React.FC<AuditViewProps> = ({
                   type="text"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="مثال: جرد أجهزة العمليات والطوارئ - الربع الأول 2025"
+                  placeholder={
+                    newAuditType === 'surgical_sets'
+                      ? 'مثال: جرد وتدقيق سيت جراحة العظام العام - أبريل 2025'
+                      : 'مثال: جرد أجهزة العمليات والطوارئ - الربع الأول 2025'
+                  }
                   className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-emerald-600 focus:outline-none"
                   required
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  القسم المستهدف بالجرد
-                </label>
-                <select
-                  value={newDept}
-                  onChange={(e) => setNewDept(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-emerald-600 focus:outline-none font-bold"
-                >
-                  <option value="all">جميع الأقسام (جرد عام شامل للمنشأة)</option>
-                  {uniqueDepartments.map((dept) => (
-                    <option key={dept} value={dept}>
-                      قسم: {dept}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  عند اختيار قسم محدد، سيتم تلقائياً إدراج جميع الأجهزة المسجلة بهذا القسم كأصول متوقعة للتحقق منها.
-                </p>
-              </div>
+              {newAuditType === 'assets' ? (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    القسم المستهدف بالجرد
+                  </label>
+                  <select
+                    value={newDept}
+                    onChange={(e) => setNewDept(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-emerald-600 focus:outline-none font-bold"
+                  >
+                    <option value="all">جميع الأقسام (جرد عام شامل للمنشأة)</option>
+                    {uniqueDepartments.map((dept) => (
+                      <option key={dept} value={dept}>
+                        قسم: {dept}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    عند اختيار قسم محدد، سيتم تلقائياً إدراج جميع الأجهزة المسجلة بهذا القسم كأصول متوقعة للتحقق منها.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    السيت الجراحي المستهدف بالجرد
+                  </label>
+                  <select
+                    value={newTargetSetId}
+                    onChange={(e) => setNewTargetSetId(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-600 focus:outline-none font-bold"
+                  >
+                    <option value="all">كافة السيتات الجراحية (جرد شامل لجميع السيتات والأدوات)</option>
+                    {surgicalSets.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        [{s.code}] {s.name} - {s.department || 'العمليات'} ({s.instrumentsCount || 0} أداة)
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    عند اختيار سيت محدد، سيتم إدراج جميع الأدوات التابعة له بأعدادها المعيارية لمطابقتها فحصاً وعداً.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
@@ -2257,10 +2978,19 @@ export const AuditView: React.FC<AuditViewProps> = ({
                   </div>
                   <div className="text-center">
                     <h1 className="text-2xl font-black text-emerald-800">
-                      محضر جرد ومطابقة الأصول والعهد الفنية
+                      {activeSession.auditType === 'surgical_sets'
+                        ? 'محضر جرد وتدقيق السيتات والأدوات الجراحية'
+                        : 'محضر جرد ومطابقة الأصول والعهد الفنية'}
                     </h1>
                     <div className="text-xs font-bold text-slate-700 mt-1">
-                      {printDepartmentFilter !== 'all'
+                      {activeSession.auditType === 'surgical_sets'
+                        ? `السيت الجراحي الذي تم جرده: [ ${
+                            activeSession.targetSetName ||
+                            (activeSession.targetSetId === 'all'
+                              ? 'كافة السيتات الجراحية المشمولة'
+                              : 'سيت محدد')
+                          } ]`
+                        : printDepartmentFilter !== 'all'
                         ? `القسم الذي تم جرده: [ ${printDepartmentFilter} ]`
                         : activeSession.targetDepartment !== 'all'
                         ? `القسم الذي تم جرده: [ ${activeSession.targetDepartment} ]`
@@ -2282,9 +3012,16 @@ export const AuditView: React.FC<AuditViewProps> = ({
                   <strong className="text-slate-900 text-sm">{activeSession.title}</strong>
                 </div>
                 <div>
-                  <span className="text-slate-500 block">القسم الذي تم جرده:</span>
+                  <span className="text-slate-500 block">
+                    {activeSession.auditType === 'surgical_sets' ? 'السيت المستهدف:' : 'القسم الذي تم جرده:'}
+                  </span>
                   <strong className="text-emerald-800 text-sm font-black">
-                    {printDepartmentFilter !== 'all'
+                    {activeSession.auditType === 'surgical_sets'
+                      ? activeSession.targetSetName ||
+                        (activeSession.targetSetId === 'all'
+                          ? 'كافة السيتات الجراحية المشمولة'
+                          : 'سيت محدد')
+                      : printDepartmentFilter !== 'all'
                       ? printDepartmentFilter
                       : activeSession.targetDepartment === 'all'
                       ? 'كافة الأقسام المشمولة'
