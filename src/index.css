@@ -5,15 +5,89 @@
     size: landscape;
     margin: 8mm 6mm;
   }
-  body {
+
+  *, *:before, *:after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  html, body {
+    background: #ffffff !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
-    background: #ffffff !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
   }
+
+  /* Hide app navigational elements, buttons, and backdrop */
+  nav, footer, aside, header, .print\:hidden, [data-no-print] {
+    display: none !important;
+  }
+
+  /* Reset modal positioning and styles during print */
+  .audit-print-modal-backdrop {
+    position: static !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+    inset: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  .audit-print-modal-content {
+    position: static !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    background: transparent !important;
+  }
+
   .print-landscape-container {
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
+  }
+
+  /* Table pagination & layout rules */
+  table {
+    page-break-inside: auto !important;
+    width: 100% !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  tbody {
+    display: table-row-group !important;
+  }
+
+  /* Signatures and Header Blocks */
+  .audit-print-signatures,
+  .audit-print-block {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 }

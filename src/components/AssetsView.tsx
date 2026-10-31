@@ -2269,7 +2269,7 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
                 title="انقر لتكبير ومعاينة الصورة"
               >
                 <img
-                  src={loadedImage}
+                  src={normalizeImageUrl(loadedImage) || loadedImage}
                   alt={asset.deviceName || asset.customId}
                   className="w-full h-full object-contain"
                 />
@@ -2333,7 +2333,7 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
               </div>
               <div className="p-4 flex items-center justify-center overflow-auto max-h-[75vh]">
                 <img
-                  src={loadedImage}
+                  src={normalizeImageUrl(loadedImage) || loadedImage}
                   alt={asset.deviceName || asset.customId}
                   className="max-w-full max-h-[70vh] object-contain rounded-lg"
                 />

@@ -179,22 +179,47 @@ export class PDFReportGenerator {
       // Calculate total height in mm at printable width
       const totalImgHeightMm = (canvas.height * printableWidth) / canvas.width;
 
-      if (totalImgHeightMm <= printableHeight) {
-        // Single landscape page
-        pdf.addImage(imgData, 'PNG', margin, margin, printableWidth, totalImgHeightMm);
+      if (totalImgHeightMm <= printableHeight * 1.15) {
+        // Fits on a single landscape page (scales slightly if within 15% tolerance to prevent spill)
+        const fittedHeight = Math.min(totalImgHeightMm, printableHeight);
+        pdf.addImage(imgData, 'PNG', margin, margin, printableWidth, fittedHeight);
       } else {
-        // Multi-page landscape slicing
-        let heightLeftMm = totalImgHeightMm;
-        let positionMm = margin;
+        // Multi-page landscape slicing using dedicated canvas slices for each page
+        const pxPerMm = canvas.width / printableWidth;
+        const pageHeightPx = Math.floor(printableHeight * pxPerMm);
+        let srcY = 0;
+        let isFirstPage = true;
 
-        pdf.addImage(imgData, 'PNG', margin, positionMm, printableWidth, totalImgHeightMm);
-        heightLeftMm -= printableHeight;
+        while (srcY < canvas.height) {
+          const sliceHeightPx = Math.min(pageHeightPx, canvas.height - srcY);
+          const sliceCanvas = document.createElement('canvas');
+          sliceCanvas.width = canvas.width;
+          sliceCanvas.height = sliceHeightPx;
+          const sliceCtx = sliceCanvas.getContext('2d');
+          if (sliceCtx) {
+            sliceCtx.fillStyle = '#ffffff';
+            sliceCtx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+            sliceCtx.drawImage(
+              canvas,
+              0,
+              srcY,
+              canvas.width,
+              sliceHeightPx,
+              0,
+              0,
+              canvas.width,
+              sliceHeightPx
+            );
+            const sliceImgData = sliceCanvas.toDataURL('image/png');
+            const sliceHeightMm = (sliceHeightPx * printableWidth) / canvas.width;
 
-        while (heightLeftMm > 0) {
-          positionMm -= printableHeight;
-          pdf.addPage('a4', 'landscape');
-          pdf.addImage(imgData, 'PNG', margin, positionMm, printableWidth, totalImgHeightMm);
-          heightLeftMm -= printableHeight;
+            if (!isFirstPage) {
+              pdf.addPage('a4', 'landscape');
+            }
+            pdf.addImage(sliceImgData, 'PNG', margin, margin, printableWidth, sliceHeightMm);
+            isFirstPage = false;
+          }
+          srcY += pageHeightPx;
         }
       }
 

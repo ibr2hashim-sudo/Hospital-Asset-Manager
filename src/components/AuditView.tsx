@@ -668,7 +668,9 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* View Header */}
+      {/* Main Interactive Audit Views (Hidden completely during print) */}
+      <div className="space-y-6 print:hidden">
+        {/* View Header */}
       <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-emerald-600/10 border border-emerald-500/30 flex items-center justify-center text-emerald-600">
@@ -2100,13 +2102,14 @@ export const AuditView: React.FC<AuditViewProps> = ({
           </div>
         </div>
       )}
+      </div>
 
       {/* ========================================================================= */}
       {/* 8. MODAL: OFFICIAL LANDSCAPE PRINTABLE AUDIT REPORT (PDF) */}
       {/* ========================================================================= */}
       {showPrintModal && activeSession && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-7xl w-full shadow-2xl border border-slate-100 text-right p-6 space-y-6 max-h-[95vh] overflow-y-auto print-landscape-container print:p-0 print:m-0 print:border-none print:shadow-none">
+        <div className="audit-print-modal-backdrop fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto print:static print:bg-transparent print:p-0 print:m-0 print:overflow-visible print:block print:inset-auto print:w-full print:h-auto">
+          <div className="audit-print-modal-content bg-white rounded-3xl max-w-7xl w-full shadow-2xl border border-slate-100 text-right p-6 space-y-6 max-h-[95vh] overflow-y-auto print-landscape-container print:p-0 print:m-0 print:border-none print:shadow-none print:max-h-none print:overflow-visible print:w-full print:max-w-full print:bg-transparent print:static">
             {/* Header controls (Hidden when printed) */}
             <div className="space-y-4 pb-4 border-b border-slate-200 print:hidden">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2245,7 +2248,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
             {/* Printable Content (Styled for Landscape Print) */}
             <div className="space-y-6 text-slate-900 font-['Tajawal']" id="audit-printable-area">
               {/* Report Header */}
-              <div className="text-center pb-4 border-b-2 border-slate-900 space-y-1">
+              <div className="text-center pb-4 border-b-2 border-slate-900 space-y-1 audit-print-block print:break-inside-avoid">
                 <div className="flex items-center justify-between text-xs text-slate-600 font-semibold mb-2">
                   <div className="text-right leading-relaxed">
                     <div className="font-bold text-slate-900 text-sm">{reportHeaderLine1}</div>
@@ -2273,7 +2276,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
               </div>
 
               {/* Session Meta */}
-              <div className="grid grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs">
+              <div className="grid grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs audit-print-block print:break-inside-avoid">
                 <div>
                   <span className="text-slate-500 block">عنوان دورة الجرد:</span>
                   <strong className="text-slate-900 text-sm">{activeSession.title}</strong>
@@ -2301,7 +2304,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
               </div>
 
               {/* Statistics Matrix (Calculated specifically for the printed department) */}
-              <div className="grid grid-cols-5 gap-2 text-center text-xs font-bold">
+              <div className="grid grid-cols-5 gap-2 text-center text-xs font-bold audit-print-block print:break-inside-avoid">
                 <div className="p-2.5 rounded-xl bg-slate-100 border border-slate-300">
                   <div className="text-slate-600 text-[10px]">المتوقع دفترياً بالقسم</div>
                   <div className="text-lg font-black text-slate-900 mt-0.5">{printStats.totalExpected}</div>
@@ -2325,9 +2328,9 @@ export const AuditView: React.FC<AuditViewProps> = ({
               </div>
 
               {/* Complete Expanded Landscape Items Table */}
-              <div className="border border-slate-300 rounded-xl overflow-hidden shadow-xs">
-                <table className="w-full text-right text-[10px] border-collapse">
-                  <thead className="bg-slate-100 text-slate-900 border-b border-slate-300 font-bold">
+              <div className="border border-slate-300 rounded-xl overflow-hidden shadow-xs print:border-slate-400 print:rounded-none">
+                <table className="w-full text-right text-[10px] border-collapse audit-print-table print:table">
+                  <thead className="bg-slate-100 text-slate-900 border-b border-slate-300 font-bold print:table-header-group">
                     <tr>
                       <th className="p-2 border-l border-slate-300 w-7 text-center">#</th>
                       <th className="p-2 border-l border-slate-300">كود الأصل (ID)</th>
@@ -2368,7 +2371,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
                         return (
                           <tr
                             key={item.id}
-                            className={`text-slate-800 ${
+                            className={`text-slate-800 print:break-inside-avoid ${
                               idx % 2 === 1 ? 'bg-slate-50/70' : 'bg-white'
                             }`}
                           >
@@ -2453,7 +2456,7 @@ export const AuditView: React.FC<AuditViewProps> = ({
               </div>
 
               {/* Signatures Area */}
-              <div className="grid grid-cols-3 gap-6 pt-6 border-t border-slate-300 text-center text-xs">
+              <div className="grid grid-cols-3 gap-6 pt-6 border-t border-slate-300 text-center text-xs audit-print-signatures print:break-inside-avoid">
                 <div className="space-y-6">
                   <div className="font-bold text-slate-800">أمين / لجنة الجرد الفني</div>
                   <div className="text-slate-600 font-semibold">{activeSession.auditedBy}</div>
@@ -2484,13 +2487,15 @@ export const AuditView: React.FC<AuditViewProps> = ({
       )}
 
       {/* Camera Barcode & QR Scanner Modal */}
-      <BarcodeCameraScanner
-        isOpen={showCameraScanner}
-        onClose={() => setShowCameraScanner(false)}
-        onScan={handleCameraScanResult}
-        title="مسح كود / سيريال الجهاز بالكاميرا"
-        continuous={continuousCameraScan}
-      />
+      <div className="print:hidden">
+        <BarcodeCameraScanner
+          isOpen={showCameraScanner}
+          onClose={() => setShowCameraScanner(false)}
+          onScan={handleCameraScanResult}
+          title="مسح كود / سيريال الجهاز بالكاميرا"
+          continuous={continuousCameraScan}
+        />
+      </div>
     </div>
   );
 };

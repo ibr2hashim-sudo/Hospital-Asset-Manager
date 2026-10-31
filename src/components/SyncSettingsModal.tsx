@@ -42,7 +42,13 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
   const [isCleaningImages, setIsCleaningImages] = useState(false);
   const [localImagesCount, setLocalImagesCount] = useState<number | null>(null);
   const [imageProgress, setImageProgress] = useState<{ current: number; total: number; key: string } | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState<{ current: number; total: number; key: string } | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{
+    current: number;
+    total: number;
+    key: string;
+    downloaded?: number;
+    skipped?: number;
+  } | null>(null);
 
   // Cancellation controllers for image operations
   const uploadAbortControllerRef = useRef<AbortController | null>(null);
@@ -160,12 +166,18 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
     }
   };
 
-  // 3b. Download all images from Cloud to Local IndexedDB
+  // 3b. Download all images from Cloud to Local IndexedDB with Smart Differential Check
   const handleDownloadImagesOnly = async () => {
     setIsDownloadingImages(true);
-    setDownloadProgress(null);
+    setDownloadProgress({
+      current: 0,
+      total: 0,
+      key: 'جاري الاتصال بالسحابة وفحص سجلات الصور...',
+      downloaded: 0,
+      skipped: 0,
+    });
     setStatusMsg({
-      text: 'جاري الاتصال بالسحابة وبدء تنزيل صور الأجهزة إلى ذاكرة هذا الجهاز...',
+      text: 'جاري الاتصال بالسحابة وفحص ومقارنة صور الأجهزة مع ذاكرة هذا الجهاز...',
       type: 'info',
     });
 
@@ -174,8 +186,14 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
 
     try {
       const res = await FirestoreSyncService.downloadAllImagesFromCloud(
-        (current, total, key) => {
-          setDownloadProgress({ current, total, key });
+        (current, total, key, stats) => {
+          setDownloadProgress({
+            current,
+            total,
+            key,
+            downloaded: stats?.downloaded,
+            skipped: stats?.skipped,
+          });
         },
         abortController.signal
       );
@@ -469,36 +487,59 @@ export const SyncSettingsModal: React.FC<SyncSettingsModalProps> = ({
 
         {/* Download Progress for Images with Cancel Button */}
         {isDownloadingImages && downloadProgress && (
-          <div className="p-3.5 bg-teal-50/95 border border-teal-200 rounded-2xl space-y-2 text-xs text-teal-950 font-bold shadow-xs animate-in fade-in">
-            <div className="flex items-center justify-between text-[11px]">
+          <div className="p-3.5 bg-teal-50/95 border border-teal-200 rounded-2xl space-y-2.5 text-xs text-teal-950 font-bold shadow-xs animate-in fade-in">
+            <div className="flex items-center justify-between text-[11px] flex-wrap gap-2">
               <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-teal-500 animate-ping" />
-                <span>جاري تنزيل الصور من السحابة إلى هذا الجهاز:</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-teal-500 animate-ping" />
+                <span className="text-teal-900 font-bold">
+                  {downloadProgress.total === 0
+                    ? 'جاري الاتصال بالسحابة وفحص سجلات الصور...'
+                    : 'جاري فحص وتنزيل الصور من السحابة لهذا الجهاز:'}
+                </span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-teal-800 bg-teal-100 px-2 py-0.5 rounded-md">
-                  {downloadProgress.current} من {downloadProgress.total} ({Math.round((downloadProgress.current / downloadProgress.total) * 100)}%)
-                </span>
+                {downloadProgress.total > 0 && (
+                  <span className="font-mono text-teal-800 bg-teal-100 px-2.5 py-0.5 rounded-md font-bold">
+                    {downloadProgress.current} من {downloadProgress.total} (
+                    {Math.round((downloadProgress.current / downloadProgress.total) * 100)}%)
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={handleCancelImageDownload}
                   className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 active:scale-95 text-white font-bold text-[11px] flex items-center gap-1 transition-all cursor-pointer shadow-xs"
-                  title="إلغاء عملية التنزيل فوراً مع حفظ ما تم تنزيله"
+                  title="إلغاء عملية التنزيل فوراً مع حفظ ما تم تنزيله بأمان"
                 >
                   <StopCircle className="w-3.5 h-3.5" />
-                  <span>إلغاء التنزيل</span>
+                  <span>إلغاء العملية</span>
                 </button>
               </div>
             </div>
+
             <div className="w-full bg-teal-200/80 rounded-full h-2.5 overflow-hidden">
               <div
                 className="bg-teal-600 h-full transition-all duration-200 rounded-full"
-                style={{ width: `${Math.round((downloadProgress.current / downloadProgress.total) * 100)}%` }}
+                style={{
+                  width:
+                    downloadProgress.total > 0
+                      ? `${Math.round((downloadProgress.current / downloadProgress.total) * 100)}%`
+                      : '15%',
+                }}
               />
             </div>
-            <div className="flex items-center justify-between text-[10px] text-teal-700 font-medium">
-              <span className="truncate font-mono">الصورة الحالية: {downloadProgress.key}</span>
-              <span className="shrink-0 text-slate-500">يتم الحفظ في ذاكرة هذا الجهاز فورياً</span>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-teal-800 font-medium pt-0.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md font-bold">
+                  📥 تم حفظ: {downloadProgress.downloaded || 0} جديدة
+                </span>
+                <span className="bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold">
+                  ⚡ تم تخطي: {downloadProgress.skipped || 0} موجودة مسبقاً
+                </span>
+              </div>
+              <span className="truncate font-mono text-teal-700 max-w-[200px]" title={downloadProgress.key}>
+                الصنف الحالي: {downloadProgress.key}
+              </span>
             </div>
           </div>
         )}

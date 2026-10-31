@@ -1352,10 +1352,17 @@ export class FirestoreSyncService {
 
   /**
    * Download all images from Firestore cloud (asset_cloud_images) into local IndexedDB
-   * Supports cancellation and progress callback. Populates all images on a new device.
+   * Smart Differential Sync: Checks existing local images in IndexedDB and only saves/updates
+   * missing or modified images to maximize performance and save storage writes.
+   * Supports cancellation and detailed progress callback. Populates all images on a new device.
    */
   static async downloadAllImagesFromCloud(
-    onProgress?: (current: number, total: number, currentKey: string) => void,
+    onProgress?: (
+      current: number,
+      total: number,
+      currentKey: string,
+      stats?: { downloaded: number; skipped: number }
+    ) => void,
     abortSignal?: AbortSignal
   ): Promise<{ success: boolean; message: string; count: number; cancelled?: boolean }> {
     try {
@@ -1367,6 +1374,20 @@ export class FirestoreSyncService {
           count: 0,
         };
       }
+
+      // 1. Preload all existing local images from IndexedDB to compare and skip identical ones
+      const localRecords = await getAllImageRecordsFromDB();
+      const localImagesMap = new Map<string, { updatedAt: number; hasData: boolean }>();
+      localRecords.forEach((r) => {
+        if (r.customId && r.dataUrl) {
+          const k = r.customId.trim().toLowerCase();
+          localImagesMap.set(k, { updatedAt: r.updatedAt || 0, hasData: true });
+          const stripped = k.replace(/[-_/\s]/g, '');
+          if (stripped && stripped !== k) {
+            localImagesMap.set(stripped, { updatedAt: r.updatedAt || 0, hasData: true });
+          }
+        }
+      });
 
       console.log('[Firestore]: Fetching all cloud images metadata...');
       const imgCollRef = collection(db, 'asset_cloud_images');
@@ -1382,6 +1403,7 @@ export class FirestoreSyncService {
 
       const totalDocs = snap.size;
       let downloaded = 0;
+      let skipped = 0;
       const syncedMeta: Record<string, number> = JSON.parse(
         localStorage.getItem('asset_synced_images_timestamps') || '{}'
       );
@@ -1393,7 +1415,7 @@ export class FirestoreSyncService {
           return {
             success: true,
             cancelled: true,
-            message: `تم إلغاء التنزيل. تم حفظ (${downloaded} صورة) بنجاح على هذا الجهاز قبل الإلغاء.`,
+            message: `تم إلغاء التنزيل بأمان. تم حفظ (${downloaded} صورة جديدة) وتخطي (${skipped} صورة موجودة مسبقاً) على هذا الجهاز قبل الإلغاء.`,
             count: downloaded,
           };
         }
@@ -1402,19 +1424,43 @@ export class FirestoreSyncService {
         const data = docSnap.data();
         const customId = data.customId || docSnap.id;
         const dataUrl = data.dataUrl;
+        const cloudUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : 0;
+
+        const cleanK = customId ? customId.trim().toLowerCase() : '';
+        const strippedK = cleanK.replace(/[-_/\s]/g, '');
+
+        // Check if the image is already present in IndexedDB and up-to-date
+        const localEntry = cleanK ? (localImagesMap.get(cleanK) || localImagesMap.get(strippedK)) : null;
+        const alreadyExistsLocally = !!(
+          localEntry?.hasData &&
+          (!cloudUpdatedAt || !localEntry.updatedAt || localEntry.updatedAt >= cloudUpdatedAt)
+        );
+
+        if (alreadyExistsLocally) {
+          skipped++;
+          if (cleanK) {
+            syncedMeta[cleanK] = localEntry?.updatedAt || Date.now();
+          }
+          if (onProgress) {
+            onProgress(i + 1, totalDocs, customId, { downloaded, skipped });
+          }
+          continue;
+        }
 
         if (onProgress) {
-          onProgress(i + 1, totalDocs, customId);
+          onProgress(i + 1, totalDocs, customId, { downloaded, skipped });
         }
 
         if (customId && dataUrl) {
           await saveImageToDB(customId, dataUrl);
-          const cleanK = customId.trim().toLowerCase();
-          syncedMeta[cleanK] = Date.now();
+          if (cleanK) {
+            syncedMeta[cleanK] = cloudUpdatedAt || Date.now();
+            localImagesMap.set(cleanK, { updatedAt: syncedMeta[cleanK], hasData: true });
+          }
           downloaded++;
 
-          // Periodically notify UI to update thumbnails
-          if (downloaded % 15 === 0 && typeof window !== 'undefined') {
+          // Periodically notify UI to update thumbnails in batches of 10
+          if (downloaded % 10 === 0 && typeof window !== 'undefined') {
             window.dispatchEvent(
               new CustomEvent('asset-image-loaded', {
                 detail: { customId, dataUrl },
@@ -1453,9 +1499,17 @@ export class FirestoreSyncService {
         window.dispatchEvent(new CustomEvent('asset-all-images-downloaded', { detail: { count: downloaded } }));
       }
 
+      if (downloaded === 0 && skipped > 0) {
+        return {
+          success: true,
+          message: `فحص ذكي: كافة الصور (${skipped} صورة) متطابقة ومحفوظة مسبقاً في ذاكرة هذا الجهاز، لم تكن هناك أي صور جديدة أو معدلة لتنزيلها.`,
+          count: 0,
+        };
+      }
+
       return {
         success: true,
-        message: `تم جلب وتخزين (${downloaded} صورة جهاز) بنجاح من السحابة إلى هذا الجهاز! كافة الصور متوفرة الآن محلياً وفورياً حتى دون إنترنت.`,
+        message: `تم الانتهاء بنجاح! تم تنزيل وحفظ (${downloaded} صورة جديدة أو معدلة)، وتخطي (${skipped} صورة موجودة ومطابقة محلياً بالفعل).`,
         count: downloaded,
       };
     } catch (err: any) {

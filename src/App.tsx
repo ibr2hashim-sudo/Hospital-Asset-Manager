@@ -117,41 +117,43 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-['Tajawal',sans-serif] text-right flex flex-col justify-between" dir="rtl">
       {/* Top Main Navigation Bar */}
-      <Navbar
-        currentUser={currentUser}
-        activeTab={activeView}
-        setActiveTab={(tab: string) => setActiveView(tab as ActiveView)}
-        isOnline={isOnline}
-        isSyncing={isSyncing}
-        pendingCount={pendingSyncCount}
-        lastSyncTime={StorageService.getSyncConfig().lastSyncTimestamp}
-        onManualSync={() => {
-          setIsSyncing(true);
-          StorageService.triggerManualSync()
-            .then((res) => {
-              reloadData();
-              alert(res.message);
-            })
-            .catch((err) => {
-              alert(err?.message || 'فشلت المزامنة اليدوية');
-            })
-            .finally(() => setIsSyncing(false));
-        }}
-        onOpenHistory={() => setShowHistoryModal(true)}
-        onOpenReset={() => setShowFactoryResetModal(true)}
-        onOpenSyncSettings={() => setShowSyncModal(true)}
-        onLogout={() => {
-          StorageService.logout();
-          reloadData();
-        }}
-        ticketPendingCount={pendingTicketsCount}
-      />
+      <div className="print:hidden">
+        <Navbar
+          currentUser={currentUser}
+          activeTab={activeView}
+          setActiveTab={(tab: string) => setActiveView(tab as ActiveView)}
+          isOnline={isOnline}
+          isSyncing={isSyncing}
+          pendingCount={pendingSyncCount}
+          lastSyncTime={StorageService.getSyncConfig().lastSyncTimestamp}
+          onManualSync={() => {
+            setIsSyncing(true);
+            StorageService.triggerManualSync()
+              .then((res) => {
+                reloadData();
+                alert(res.message);
+              })
+              .catch((err) => {
+                alert(err?.message || 'فشلت المزامنة اليدوية');
+              })
+              .finally(() => setIsSyncing(false));
+          }}
+          onOpenHistory={() => setShowHistoryModal(true)}
+          onOpenReset={() => setShowFactoryResetModal(true)}
+          onOpenSyncSettings={() => setShowSyncModal(true)}
+          onLogout={() => {
+            StorageService.logout();
+            reloadData();
+          }}
+          ticketPendingCount={pendingTicketsCount}
+        />
+      </div>
 
       {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1 w-full">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6 flex-1 w-full print:p-0 print:m-0 print:max-w-full print:w-full">
         {/* Role Notice for Supervisor */}
         {currentUser?.role === 'supervisor' && (
-          <div className="bg-purple-50 border border-purple-200 rounded-2xl p-3.5 flex items-center gap-2 text-xs text-purple-900 shadow-xs">
+          <div className="bg-purple-50 border border-purple-200 rounded-2xl p-3.5 flex items-center gap-2 text-xs text-purple-900 shadow-xs print:hidden">
             <Building2 className="w-4 h-4 text-purple-600 shrink-0" />
             <span>
               أنت مسجل كـ <strong>مشرف قسم</strong> على: <strong>{currentUser.assignedDepartment || 'غير محدد'}</strong> (عرض وتقديم بلاغات قسمك فقط).
@@ -160,7 +162,7 @@ export default function App() {
         )}
 
         {/* Primary View Switcher Navigation Pills */}
-        <div className="bg-white rounded-2xl p-1.5 border border-slate-200/80 shadow-xs flex items-center gap-1 overflow-x-auto text-xs font-bold">
+        <div className="bg-white rounded-2xl p-1.5 border border-slate-200/80 shadow-xs flex items-center gap-1 overflow-x-auto text-xs font-bold print:hidden">
           <button
             onClick={() => setActiveView('dashboard')}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
