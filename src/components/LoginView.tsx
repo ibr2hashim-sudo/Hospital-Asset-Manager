@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Package,
   Lock,
@@ -9,9 +9,12 @@ import {
   Shield,
   AlertCircle,
   Cloud,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-react';
 import { User } from '../types';
 import { StorageService } from '../services/storage';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 interface LoginViewProps {
   users?: User[];
@@ -24,8 +27,58 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isSyncingUsers, setIsSyncingUsers] = useState(false);
+  const [syncStatusMsg, setSyncStatusMsg] = useState<{
+    text: string;
+    type: 'success' | 'error' | 'info';
+  } | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    let mounted = true;
+    const autoSyncUsers = async () => {
+      setIsSyncingUsers(true);
+      try {
+        const res = await FirestoreSyncService.syncUsersFromCloud();
+        if (mounted && res.success && res.updatedCount > 0) {
+          setSyncStatusMsg({
+            text: `تم جلب وتحديث حسابات المستخدمين من السحابة (${res.count} حساب).`,
+            type: 'info',
+          });
+        }
+      } finally {
+        if (mounted) {
+          setIsSyncingUsers(false);
+        }
+      }
+    };
+    autoSyncUsers();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleManualSyncUsers = async () => {
+    if (isSyncingUsers) return;
+    setIsSyncingUsers(true);
+    setErrorMessage('');
+    setSyncStatusMsg(null);
+    try {
+      const res = await FirestoreSyncService.syncUsersFromCloud();
+      setSyncStatusMsg({
+        text: res.message,
+        type: res.success ? 'success' : 'error',
+      });
+    } catch (err: any) {
+      setSyncStatusMsg({
+        text: err?.message || 'فشل مزامنة المستخدمين من السحابة',
+        type: 'error',
+      });
+    } finally {
+      setIsSyncingUsers(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
     setIsLoading(true);
@@ -38,9 +91,25 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
         throw new Error('يرجى إدخال كلمة المرور');
       }
 
-      const loggedInUser = StorageService.login(username, password);
-      setIsLoading(false);
-      onLogin(loggedInUser);
+      try {
+        const loggedInUser = StorageService.login(username, password);
+        setIsLoading(false);
+        onLogin(loggedInUser);
+        return;
+      } catch (localErr: any) {
+        // Attempt syncing users from Firestore before rejecting credentials
+        setIsSyncingUsers(true);
+        const syncRes = await FirestoreSyncService.syncUsersFromCloud();
+        setIsSyncingUsers(false);
+
+        if (syncRes.success) {
+          const retryUser = StorageService.login(username, password);
+          setIsLoading(false);
+          onLogin(retryUser);
+          return;
+        }
+        throw localErr;
+      }
     } catch (err: any) {
       setIsLoading(false);
       setErrorMessage(err?.message || 'فشل تسجيل الدخول، تأكد من صحة البيانات');
@@ -83,6 +152,28 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
           >
             <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
             <span>{errorMessage}</span>
+          </div>
+        )}
+
+        {/* Sync Status Alert Box */}
+        {syncStatusMsg && (
+          <div
+            className={`p-3 rounded-2xl border text-xs font-semibold flex items-center gap-2.5 ${
+              syncStatusMsg.type === 'success'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : syncStatusMsg.type === 'error'
+                ? 'bg-red-500/10 border-red-500/30 text-red-300'
+                : 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+            }`}
+          >
+            {syncStatusMsg.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+            ) : syncStatusMsg.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+            ) : (
+              <Cloud className="w-4 h-4 shrink-0 text-blue-400" />
+            )}
+            <span>{syncStatusMsg.text}</span>
           </div>
         )}
 
@@ -150,6 +241,18 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
               <LogIn className="w-4 h-4" />
             )}
             <span>تسجيل الدخول للنظام</span>
+          </button>
+
+          {/* Manual Sync Users Button */}
+          <button
+            id="login-sync-users-button"
+            type="button"
+            onClick={handleManualSyncUsers}
+            disabled={isSyncingUsers || isLoading}
+            className="w-full py-2.5 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white font-semibold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingUsers ? 'animate-spin' : ''}`} />
+            <span>{isSyncingUsers ? 'جاري مزامنة المستخدمين من السحابة...' : 'مزامنة المستخدمين من السحابة'}</span>
           </button>
         </form>
 

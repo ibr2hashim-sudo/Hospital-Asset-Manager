@@ -391,12 +391,15 @@ export class StorageService {
     const currentUser = this.getCurrentUser();
     let savedUser: User;
 
+    const nowIso = new Date().toISOString();
+
     if (user.id) {
       const index = users.findIndex((u) => u.id === user.id);
       if (index !== -1) {
         savedUser = {
           ...users[index],
           ...user,
+          updatedAt: nowIso,
         };
         users[index] = savedUser;
         this.addHistoryLog(
@@ -417,7 +420,8 @@ export class StorageService {
       savedUser = {
         ...user,
         id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        createdAt: new Date().toISOString(),
+        createdAt: nowIso,
+        updatedAt: nowIso,
       };
       users.push(savedUser);
       this.addHistoryLog(

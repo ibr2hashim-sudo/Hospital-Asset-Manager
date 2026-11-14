@@ -184,13 +184,18 @@ export class FirestoreSyncService {
   }
 
   private static async checkAndPerformInitialLoad(): Promise<void> {
+    // Always sync users quickly on startup so newly added accounts work immediately across devices
+    await this.syncUsersFromCloud();
+
     const isInitialized = localStorage.getItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG);
     const localAssets = localStorage.getItem('asset_mgmt_assets');
 
     if (!isInitialized || !localAssets || localAssets === '[]') {
       console.log('[Firestore]: First-time device load detected. Syncing from cloud...');
-      await this.pullAllCloudDataToLocal();
-      localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+      const res = await this.pullAllCloudDataToLocal();
+      if (res.success) {
+        localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+      }
     }
   }
 
@@ -637,18 +642,134 @@ export class FirestoreSyncService {
     }
   }
 
-  static async syncUser(user: User): Promise<void> {
+  static async syncUser(user: User): Promise<boolean> {
     try {
+      const now = new Date().toISOString();
+      const updatedUser: User = { ...user, syncedAt: now };
       const docRef = doc(db, 'users', user.id);
-      await setDoc(docRef, cleanForFirestore(user), { merge: true });
+      await setDoc(docRef, cleanForFirestore(updatedUser), { merge: true });
+
+      try {
+        const usersStr = localStorage.getItem('asset_mgmt_users');
+        if (usersStr) {
+          const users: User[] = JSON.parse(usersStr);
+          const idx = users.findIndex((u) => u.id === user.id);
+          if (idx !== -1) {
+            users[idx] = { ...users[idx], syncedAt: now };
+            localStorage.setItem('asset_mgmt_users', JSON.stringify(users));
+          }
+        }
+      } catch {}
+
       await this.emitSyncChange({
         col: 'users',
         id: user.id,
         action: 'set',
         timestamp: Date.now(),
       });
+      return true;
     } catch (err) {
       this.handleSyncError('syncUser', err);
+      return false;
+    }
+  }
+
+  /**
+   * Pulls and merges all user accounts from Firestore into local storage.
+   * Ensures users created on any device can log in immediately on any other device.
+   */
+  static async syncUsersFromCloud(): Promise<{
+    success: boolean;
+    count: number;
+    updatedCount: number;
+    message: string;
+  }> {
+    try {
+      const usersSnap = await getDocs(collection(db, 'users'));
+      const remoteUsers: User[] = [];
+      usersSnap.forEach((d) => {
+        const data = d.data() as User;
+        if (data && data.username) {
+          remoteUsers.push({
+            ...data,
+            syncedAt: data.syncedAt || data.updatedAt || new Date().toISOString(),
+          });
+        }
+      });
+
+      const localStr = localStorage.getItem('asset_mgmt_users');
+      const localUsers: User[] = localStr ? JSON.parse(localStr) : [];
+
+      if (remoteUsers.length === 0) {
+        return {
+          success: true,
+          count: localUsers.length,
+          updatedCount: 0,
+          message: 'لا توجد حسابات مستخدمين مرفوعة في السحابة بعد.',
+        };
+      }
+
+      const mergedMap = new Map<string, User>();
+      const seenUsernames = new Set<string>();
+      let updatedCount = 0;
+
+      // Remote users take precedence
+      remoteUsers.forEach((ru) => {
+        const unameKey = ru.username.trim().toLowerCase();
+        const existingLocal = localUsers.find(
+          (lu) => lu.id === ru.id || lu.username.trim().toLowerCase() === unameKey
+        );
+        if (
+          !existingLocal ||
+          existingLocal.password !== ru.password ||
+          existingLocal.role !== ru.role ||
+          existingLocal.isActive !== ru.isActive ||
+          existingLocal.fullName !== ru.fullName ||
+          existingLocal.assignedDepartment !== ru.assignedDepartment
+        ) {
+          updatedCount++;
+        }
+        mergedMap.set(ru.id, ru);
+        seenUsernames.add(unameKey);
+      });
+
+      // Preserve unsynced local-only users (created offline) and ensure default Admin is never lost
+      localUsers.forEach((lu) => {
+        const unameKey = lu.username.trim().toLowerCase();
+        const isDefaultAdmin = lu.id === 'user-admin-1' || unameKey === 'admin';
+        if (!mergedMap.has(lu.id) && !seenUsernames.has(unameKey)) {
+          if (!lu.syncedAt || isDefaultAdmin) {
+            mergedMap.set(lu.id, lu);
+            seenUsernames.add(unameKey);
+          }
+        }
+      });
+
+      const mergedUsers = Array.from(mergedMap.values());
+      localStorage.setItem('asset_mgmt_users', JSON.stringify(mergedUsers));
+
+      this.backendUnavailable = false;
+      this.quotaExceeded = false;
+      this.notifyStatusChange();
+
+      if (updatedCount > 0 && this.onDataChangedCallback) {
+        this.onDataChangedCallback();
+      }
+
+      return {
+        success: true,
+        count: mergedUsers.length,
+        updatedCount,
+        message: `تمت مزامنة (${mergedUsers.length}) حساب مستخدم من السحابة بنجاح.`,
+      };
+    } catch (err: any) {
+      this.handleSyncError('syncUsersFromCloud', err);
+      return {
+        success: false,
+        count: 0,
+        updatedCount: 0,
+        message: `فشل مزامنة المستخدمين من السحابة: ${err?.message || 'تحقق من الاتصال وصلاحيات فايربيس'}`,
+      };
     }
   }
 
@@ -786,6 +907,7 @@ export class FirestoreSyncService {
       const modifiedAudits = audits.filter(isModified);
       const modifiedSets = sets.filter(isModified);
       const modifiedInstruments = instruments.filter(isModified);
+      const modifiedUsers = users.filter(isModified);
 
       const totalModified =
         modifiedAssets.length +
@@ -793,17 +915,33 @@ export class FirestoreSyncService {
         modifiedPeriodic.length +
         modifiedAudits.length +
         modifiedSets.length +
-        modifiedInstruments.length;
+        modifiedInstruments.length +
+        modifiedUsers.length;
 
       // If nothing was modified, return immediately without redundant network writes!
       if (totalModified === 0) {
         return {
           success: true,
-          message: `كافة البيانات متطابقة ومحدثة مع السحابة (تم فحص ${assets.length} أصل و ${tickets.length} بلاغ صيانة، ولا توجد أي إضافات أو تعديلات جديدة للرفع).`,
+          message: `كافة البيانات متطابقة ومحدثة مع السحابة (تم فحص ${assets.length} أصل و ${tickets.length} بلاغ صيانة و ${users.length} مستخدم، ولا توجد أي إضافات أو تعديلات جديدة للرفع).`,
         };
       }
 
       const now = new Date().toISOString();
+
+      // 0. Modified Users
+      if (modifiedUsers.length > 0) {
+        for (let i = 0; i < modifiedUsers.length; i += 200) {
+          const batch = writeBatch(db);
+          const chunk = modifiedUsers.slice(i, i + 200);
+          chunk.forEach((u) => {
+            u.syncedAt = now;
+            const ref = doc(db, 'users', u.id);
+            batch.set(ref, cleanForFirestore(u), { merge: true });
+          });
+          await batch.commit();
+        }
+        localStorage.setItem('asset_mgmt_users', JSON.stringify(users));
+      }
 
       // 1. Modified Assets
       if (modifiedAssets.length > 0) {
@@ -925,7 +1063,7 @@ export class FirestoreSyncService {
 
       return {
         success: true,
-        message: `تم فحص كافة السجلات بنجاح، ورفع (${modifiedAssets.length} أصل، ${modifiedTickets.length} بلاغ صيانة، ${totalModified} تعديل إجمالي) تم إضافتها أو تعديلها حديثاً فقط.`,
+        message: `تم فحص كافة السجلات بنجاح، ورفع (${modifiedAssets.length} أصل، ${modifiedTickets.length} بلاغ صيانة، ${modifiedUsers.length} مستخدم، ${totalModified} تعديل إجمالي) تم إضافتها أو تعديلها حديثاً فقط.`,
       };
     } catch (err: any) {
       this.handleSyncError('pushAllLocalData', err);
@@ -946,14 +1084,21 @@ export class FirestoreSyncService {
 
       let updatedCount = 0;
 
-      // 1. Assets
-      const assetsRef = collection(db, 'assets');
-      const assetsSnap = lastPullIso
-        ? await getDocs(query(assetsRef, where('updatedAt', '>', lastPullIso)))
-        : await getDocs(assetsRef);
+      // 1. Users (ALWAYS sync first so new user accounts work immediately on any device)
+      const usersSyncRes = await this.syncUsersFromCloud();
+      if (!usersSyncRes.success) {
+        throw new Error(usersSyncRes.message);
+      }
+      updatedCount += usersSyncRes.updatedCount;
 
+      // 2. Assets
       const assetsStr = localStorage.getItem('asset_mgmt_assets');
       const localAssets: Asset[] = assetsStr ? JSON.parse(assetsStr) : [];
+      const assetsRef = collection(db, 'assets');
+      const assetsSnap =
+        lastPullIso && localAssets.length > 0
+          ? await getDocs(query(assetsRef, where('updatedAt', '>', lastPullIso)))
+          : await getDocs(assetsRef);
 
       if (!assetsSnap.empty) {
         assetsSnap.forEach((d) => {
@@ -976,14 +1121,14 @@ export class FirestoreSyncService {
         localStorage.setItem('asset_mgmt_assets', JSON.stringify(localAssets));
       }
 
-      // 2. Tickets
-      const ticketsRef = collection(db, 'tickets');
-      const ticketsSnap = lastPullIso
-        ? await getDocs(query(ticketsRef, where('updatedAt', '>', lastPullIso)))
-        : await getDocs(ticketsRef);
-
+      // 3. Tickets
       const ticketsStr = localStorage.getItem('asset_mgmt_tickets');
       const localTickets: MaintenanceTicket[] = ticketsStr ? JSON.parse(ticketsStr) : [];
+      const ticketsRef = collection(db, 'tickets');
+      const ticketsSnap =
+        lastPullIso && localTickets.length > 0
+          ? await getDocs(query(ticketsRef, where('updatedAt', '>', lastPullIso)))
+          : await getDocs(ticketsRef);
 
       if (!ticketsSnap.empty) {
         ticketsSnap.forEach((d) => {
@@ -1000,14 +1145,14 @@ export class FirestoreSyncService {
         localStorage.setItem('asset_mgmt_tickets', JSON.stringify(localTickets));
       }
 
-      // 3. Periodic Records
-      const periodicRef = collection(db, 'periodic_records');
-      const periodicSnap = lastPullIso
-        ? await getDocs(query(periodicRef, where('updatedAt', '>', lastPullIso)))
-        : await getDocs(periodicRef);
-
+      // 4. Periodic Records
       const periodicStr = localStorage.getItem('asset_mgmt_periodic');
       const localPeriodic: PeriodicMaintenanceRecord[] = periodicStr ? JSON.parse(periodicStr) : [];
+      const periodicRef = collection(db, 'periodic_records');
+      const periodicSnap =
+        lastPullIso && localPeriodic.length > 0
+          ? await getDocs(query(periodicRef, where('updatedAt', '>', lastPullIso)))
+          : await getDocs(periodicRef);
 
       if (!periodicSnap.empty) {
         periodicSnap.forEach((d) => {
@@ -1024,14 +1169,14 @@ export class FirestoreSyncService {
         localStorage.setItem('asset_mgmt_periodic', JSON.stringify(localPeriodic));
       }
 
-      // 4. Audits
-      const auditsRef = collection(db, 'audit_sessions');
-      const auditsSnap = lastPullIso
-        ? await getDocs(query(auditsRef, where('updatedAt', '>', lastPullIso)))
-        : await getDocs(auditsRef);
-
+      // 5. Audits
       const auditsStr = localStorage.getItem('asset_mgmt_audit_sessions');
       const localAudits: AuditSession[] = auditsStr ? JSON.parse(auditsStr) : [];
+      const auditsRef = collection(db, 'audit_sessions');
+      const auditsSnap =
+        lastPullIso && localAudits.length > 0
+          ? await getDocs(query(auditsRef, where('updatedAt', '>', lastPullIso)))
+          : await getDocs(auditsRef);
 
       if (!auditsSnap.empty) {
         auditsSnap.forEach((d) => {
@@ -1047,16 +1192,6 @@ export class FirestoreSyncService {
         localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(localAudits));
       }
 
-      // 5. Users (first time load only)
-      if (!lastPullIso) {
-        const usersSnap = await getDocs(collection(db, 'users'));
-        if (!usersSnap.empty) {
-          const remoteUsers: User[] = [];
-          usersSnap.forEach((d) => remoteUsers.push(d.data() as User));
-          localStorage.setItem('asset_mgmt_users', JSON.stringify(remoteUsers));
-        }
-      }
-
       // 6. Categories
       const catSnap = await getDoc(doc(db, 'settings', 'categories'));
       if (catSnap.exists()) {
@@ -1067,13 +1202,13 @@ export class FirestoreSyncService {
       }
 
       // 7. Surgical sets
-      const setsRef = collection(db, 'surgical_sets');
-      const setsSnap = lastPullIso
-        ? await getDocs(query(setsRef, where('updatedAt', '>', lastPullIso)))
-        : await getDocs(setsRef);
-
       const setsStr = localStorage.getItem('asset_mgmt_surgical_sets');
       const localSets: SurgicalSet[] = setsStr ? JSON.parse(setsStr) : [];
+      const setsRef = collection(db, 'surgical_sets');
+      const setsSnap =
+        lastPullIso && localSets.length > 0
+          ? await getDocs(query(setsRef, where('updatedAt', '>', lastPullIso)))
+          : await getDocs(setsRef);
 
       if (!setsSnap.empty) {
         setsSnap.forEach((d) => {
@@ -1087,13 +1222,13 @@ export class FirestoreSyncService {
       }
 
       // 8. Surgical instruments
-      const instRef = collection(db, 'surgical_instruments');
-      const instSnap = lastPullIso
-        ? await getDocs(query(instRef, where('updatedAt', '>', lastPullIso)))
-        : await getDocs(instRef);
-
       const instStr = localStorage.getItem('asset_mgmt_surgical_instruments');
       const localInsts: SurgicalInstrument[] = instStr ? JSON.parse(instStr) : [];
+      const instRef = collection(db, 'surgical_instruments');
+      const instSnap =
+        lastPullIso && localInsts.length > 0
+          ? await getDocs(query(instRef, where('updatedAt', '>', lastPullIso)))
+          : await getDocs(instRef);
 
       if (!instSnap.empty) {
         instSnap.forEach((d) => {

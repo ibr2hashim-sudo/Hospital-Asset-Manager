@@ -14,9 +14,12 @@ import {
   X,
   AlertTriangle,
   UserCheck,
+  RefreshCw,
+  Cloud,
 } from 'lucide-react';
 import { User, UserRole, Asset } from '../types';
 import { StorageService } from '../services/storage';
+import { FirestoreSyncService } from '../services/firestoreSync';
 
 interface UserManagementViewProps {
   currentUser: User | null;
@@ -34,6 +37,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [deleteConfirmUser, setDeleteConfirmUser] = useState<User | null>(null);
+  const [isSyncingUsers, setIsSyncingUsers] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const safeUsers = useMemo(() => (Array.isArray(users) ? users : []), [users]);
   const safeAssets = useMemo(() => (Array.isArray(assets) ? assets : []), [assets]);
@@ -44,6 +49,35 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   }, [safeAssets]);
 
   const activeCount = safeUsers.filter((u) => u.isActive !== false).length;
+
+  const handleSyncUsersWithCloud = async () => {
+    if (isSyncingUsers) return;
+    setIsSyncingUsers(true);
+    setSyncMsg(null);
+    try {
+      const pushRes = await FirestoreSyncService.pushAllLocalDataToFirestore();
+      const pullRes = await FirestoreSyncService.syncUsersFromCloud();
+      onRefresh();
+      if (pullRes.success) {
+        setSyncMsg({
+          text: pullRes.message,
+          type: 'success',
+        });
+      } else {
+        setSyncMsg({
+          text: pullRes.message || pushRes.message,
+          type: 'error',
+        });
+      }
+    } catch (err: any) {
+      setSyncMsg({
+        text: err?.message || 'حدث خطأ أثناء مزامنة المستخدمين مع السحابة',
+        type: 'error',
+      });
+    } finally {
+      setIsSyncingUsers(false);
+    }
+  };
 
   const getRoleBadge = (role: UserRole) => {
     switch (role) {
@@ -100,17 +134,55 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            setEditingUser(null);
-            setShowAddModal(true);
-          }}
-          className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/20 transition-all hover:scale-105"
-        >
-          <Plus className="w-4 h-4" />
-          إضافة مستخدم جديد
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={handleSyncUsersWithCloud}
+            disabled={isSyncingUsers}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold transition-all disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncingUsers ? 'animate-spin' : ''}`} />
+            {isSyncingUsers ? 'جاري المزامنة...' : 'مزامنة المستخدمين مع السحابة'}
+          </button>
+
+          <button
+            onClick={() => {
+              setEditingUser(null);
+              setShowAddModal(true);
+            }}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/20 transition-all hover:scale-105"
+          >
+            <Plus className="w-4 h-4" />
+            إضافة مستخدم جديد
+          </button>
+        </div>
       </div>
+
+      {syncMsg && (
+        <div
+          className={`p-3.5 rounded-2xl border text-xs font-bold flex items-center justify-between gap-3 ${
+            syncMsg.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-red-50 border-red-200 text-red-800'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {syncMsg.type === 'success' ? (
+              <Cloud className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+            )}
+            <span>{syncMsg.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSyncMsg(null)}
+            className="text-slate-400 hover:text-slate-600"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Role Explanations Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

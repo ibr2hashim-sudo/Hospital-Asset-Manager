@@ -8,6 +8,8 @@ export interface User {
   role: UserRole;
   assignedDepartment?: string; // For supervisors (مشرف القسم)
   createdAt: string;
+  updatedAt?: string;
+  syncedAt?: string;
   isActive: boolean;
 }
 
