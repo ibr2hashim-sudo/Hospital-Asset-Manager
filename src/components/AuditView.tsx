@@ -53,6 +53,7 @@ import {
   SurgicalInstrument,
 } from '../types';
 import { StorageService } from '../services/storage';
+import { SystemSettingsService } from '../services/systemSettings';
 import { BarcodeCameraScanner } from './BarcodeCameraScanner';
 import { PDFReportGenerator } from '../utils/pdfExport';
 
@@ -150,6 +151,57 @@ export const AuditView: React.FC<AuditViewProps> = ({
   useEffect(() => {
     setSessions(StorageService.getAuditSessions());
   }, [assets]);
+
+  // Browser History Integration for Back Button (Archive Folder -> Active Session -> Print Modal)
+  const isPoppingHistoryRef = useRef(false);
+  const lastHistoryDepthRef = useRef(0);
+
+  useEffect(() => {
+    const currentDepth =
+      showPrintModal && selectedSessionId ? 3 : selectedSessionId ? 2 : selectedArchiveFolder ? 1 : 0;
+
+    if (isPoppingHistoryRef.current) {
+      isPoppingHistoryRef.current = false;
+      lastHistoryDepthRef.current = currentDepth;
+      return;
+    }
+
+    if (currentDepth > lastHistoryDepthRef.current) {
+      window.history.pushState(
+        {
+          appManaged: true,
+          view: 'audit',
+          sub: {
+            auditDomain,
+            auditViewMode,
+            archiveFolder: selectedArchiveFolder,
+            sessionId: selectedSessionId,
+            printModal: showPrintModal,
+          },
+        },
+        '',
+        '#audit'
+      );
+    }
+    lastHistoryDepthRef.current = currentDepth;
+  }, [auditDomain, auditViewMode, selectedArchiveFolder, selectedSessionId, showPrintModal]);
+
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const st = e.state as any;
+      if (st?.appManaged && st.view === 'audit') {
+        isPoppingHistoryRef.current = true;
+        const sub = st.sub || {};
+        if (sub.auditDomain) setAuditDomain(sub.auditDomain);
+        if (sub.auditViewMode) setAuditViewMode(sub.auditViewMode);
+        setSelectedArchiveFolder(sub.archiveFolder || null);
+        setSelectedSessionId(sub.sessionId || null);
+        setShowPrintModal(Boolean(sub.printModal));
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Selected session object
   const activeSession = useMemo(() => {
@@ -2967,14 +3019,23 @@ export const AuditView: React.FC<AuditViewProps> = ({
             </div>
 
             {/* Printable Content (Styled for Landscape Print) */}
-            <div className="space-y-6 text-slate-900 font-['Tajawal']" id="audit-printable-area">
+            <div className="space-y-6 text-slate-900 font-app" id="audit-printable-area">
               {/* Report Header */}
               <div className="text-center pb-4 border-b-2 border-slate-900 space-y-1 audit-print-block print:break-inside-avoid">
                 <div className="flex items-center justify-between text-xs text-slate-600 font-semibold mb-2">
-                  <div className="text-right leading-relaxed">
-                    <div className="font-bold text-slate-900 text-sm">{reportHeaderLine1}</div>
-                    <div>{reportHeaderLine2}</div>
-                    <div>{reportHeaderLine3}</div>
+                  <div className="flex items-center gap-2.5 text-right leading-relaxed">
+                    {SystemSettingsService.getSettings().logoDataUrl && (
+                      <img
+                        src={SystemSettingsService.getSettings().logoDataUrl}
+                        alt="Logo"
+                        className="w-12 h-12 object-contain rounded-lg border border-slate-200 p-0.5 bg-white shrink-0"
+                      />
+                    )}
+                    <div>
+                      <div className="font-bold text-slate-900 text-sm">{reportHeaderLine1}</div>
+                      <div>{reportHeaderLine2}</div>
+                      <div>{reportHeaderLine3}</div>
+                    </div>
                   </div>
                   <div className="text-center">
                     <h1 className="text-2xl font-black text-emerald-800">

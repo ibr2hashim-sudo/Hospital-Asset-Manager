@@ -20,8 +20,10 @@ import {
   AuditSession,
   SurgicalSet,
   SurgicalInstrument,
+  SystemSettings,
 } from '../types';
 import { saveImageToDB, getAllImagesFromDB, getAllImageRecordsFromDB, StorageService } from './storage';
+import { SystemSettingsService } from './systemSettings';
 
 function cleanForFirestore<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj, (_, v) => (v === undefined ? null : v)));
@@ -184,8 +186,11 @@ export class FirestoreSyncService {
   }
 
   private static async checkAndPerformInitialLoad(): Promise<void> {
-    // Always sync users quickly on startup so newly added accounts work immediately across devices
-    await this.syncUsersFromCloud();
+    // Always sync users and branding quickly on startup across devices
+    await Promise.all([
+      this.syncUsersFromCloud(),
+      this.syncSystemSettingsFromCloud(),
+    ]);
 
     const isInitialized = localStorage.getItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG);
     const localAssets = localStorage.getItem('asset_mgmt_assets');
@@ -236,6 +241,8 @@ export class FirestoreSyncService {
           dataModified = (await this.applyUserDelta(change)) || dataModified;
         } else if (change.col === 'settings' && change.id === 'categories') {
           dataModified = (await this.applyCategoriesDelta()) || dataModified;
+        } else if (change.col === 'settings' && change.id === 'branding') {
+          dataModified = (await this.applyBrandingDelta()) || dataModified;
         } else if (change.col === 'surgical_sets') {
           dataModified = (await this.applySurgicalSetDelta(change)) || dataModified;
         } else if (change.col === 'surgical_instruments') {
@@ -412,6 +419,11 @@ export class FirestoreSyncService {
       this.handleSyncError('applyCategoriesDelta', err);
     }
     return false;
+  }
+
+  private static async applyBrandingDelta(): Promise<boolean> {
+    const res = await this.syncSystemSettingsFromCloud();
+    return res.success && res.updated;
   }
 
   private static async applySurgicalSetDelta(change: RecentChange): Promise<boolean> {
@@ -799,6 +811,60 @@ export class FirestoreSyncService {
       });
     } catch (err) {
       this.handleSyncError('syncCategories', err);
+    }
+  }
+
+  static async syncSystemSettings(settings: SystemSettings): Promise<{ success: boolean; message: string }> {
+    try {
+      const payload: SystemSettings = {
+        ...settings,
+        updatedAt: new Date().toISOString(),
+      };
+      const docRef = doc(db, 'settings', 'branding');
+      await setDoc(docRef, cleanForFirestore(payload), { merge: true });
+      await this.emitSyncChange({
+        col: 'settings',
+        id: 'branding',
+        action: 'set',
+        timestamp: Date.now(),
+      });
+      return {
+        success: true,
+        message: 'تم حفظ إعدادات الصفحة والهوية والخط ومزامنتها مع السحابة بنجاح.',
+      };
+    } catch (err: any) {
+      this.handleSyncError('syncSystemSettings', err);
+      return {
+        success: false,
+        message: `تم الحفظ محلياً، ولكن تعذرت المزامنة السحابية: ${err?.message || 'تحقق من الاتصال'}`,
+      };
+    }
+  }
+
+  static async syncSystemSettingsFromCloud(): Promise<{ success: boolean; updated: boolean; message: string }> {
+    try {
+      const snap = await getDoc(doc(db, 'settings', 'branding'));
+      if (!snap.exists()) {
+        return {
+          success: true,
+          updated: false,
+          message: 'لا توجد إعدادات هوية وتخصيص مرفوعة على السحابة بعد.',
+        };
+      }
+      const remote = snap.data() as SystemSettings;
+      SystemSettingsService.saveSettingsLocal(remote);
+      return {
+        success: true,
+        updated: true,
+        message: 'تم جلب وتطبيق إعدادات الصفحة والهوية من السحابة بنجاح.',
+      };
+    } catch (err: any) {
+      this.handleSyncError('syncSystemSettingsFromCloud', err);
+      return {
+        success: false,
+        updated: false,
+        message: `فشل جلب إعدادات الصفحة من السحابة: ${err?.message || 'خطأ في الاتصال'}`,
+      };
     }
   }
 
@@ -1192,7 +1258,7 @@ export class FirestoreSyncService {
         localStorage.setItem('asset_mgmt_audit_sessions', JSON.stringify(localAudits));
       }
 
-      // 6. Categories
+      // 6. Categories & System Branding Settings
       const catSnap = await getDoc(doc(db, 'settings', 'categories'));
       if (catSnap.exists()) {
         const catData = catSnap.data();
@@ -1200,6 +1266,7 @@ export class FirestoreSyncService {
           localStorage.setItem('asset_mgmt_periodic_categories', JSON.stringify(catData.list));
         }
       }
+      await this.syncSystemSettingsFromCloud();
 
       // 7. Surgical sets
       const setsStr = localStorage.getItem('asset_mgmt_surgical_sets');

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Building2,
   Plus,
@@ -75,6 +75,56 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedDept, setSelectedDept] = useState<string | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
+
+  // Browser History Integration for Back Button
+  const isPoppingHistoryRef = useRef(false);
+  const lastHistoryDepthRef = useRef(0);
+
+  useEffect(() => {
+    const currentDepth = selectedAsset ? 3 : selectedDept ? 2 : selectedCategory ? 1 : 0;
+
+    if (isPoppingHistoryRef.current) {
+      isPoppingHistoryRef.current = false;
+      lastHistoryDepthRef.current = currentDepth;
+      return;
+    }
+
+    if (currentDepth > lastHistoryDepthRef.current) {
+      window.history.pushState(
+        {
+          appManaged: true,
+          view: 'periodic',
+          sub: {
+            category: selectedCategory,
+            dept: selectedDept,
+            assetId: selectedAsset?.id || null,
+          },
+        },
+        '',
+        '#periodic'
+      );
+    }
+    lastHistoryDepthRef.current = currentDepth;
+  }, [selectedCategory, selectedDept, selectedAsset]);
+
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const st = e.state as any;
+      if (st?.appManaged && st.view === 'periodic') {
+        isPoppingHistoryRef.current = true;
+        const sub = st.sub || {};
+        setSelectedCategory(sub.category || null);
+        setSelectedDept(sub.dept || null);
+        if (sub.assetId) {
+          setSelectedAsset(safeAssets.find((a) => a.id === sub.assetId) || null);
+        } else {
+          setSelectedAsset(null);
+        }
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [safeAssets]);
 
   // Search
   const [searchTerm, setSearchTerm] = useState('');

@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+:root {
+  --app-font-family: 'Tajawal', sans-serif;
+}
+
+body,
+.font-app {
+  font-family: var(--app-font-family) !important;
+}
+
 @media print {
   @page {
     size: landscape;

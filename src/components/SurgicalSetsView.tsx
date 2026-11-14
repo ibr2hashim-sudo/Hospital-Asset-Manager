@@ -122,6 +122,48 @@ export const SurgicalSetsView: React.FC<SurgicalSetsViewProps> = ({
   const [instStatusFilter, setInstStatusFilter] = useState('all');
   const [instViewMode, setInstViewMode] = useState<'table' | 'cards'>('cards');
 
+  // Browser History Integration for Back Button (Active Surgical Set -> List)
+  const isPoppingHistoryRef = useRef(false);
+  const lastHistoryDepthRef = useRef(0);
+
+  useEffect(() => {
+    const currentDepth = activeSet ? 1 : 0;
+    if (isPoppingHistoryRef.current) {
+      isPoppingHistoryRef.current = false;
+      lastHistoryDepthRef.current = currentDepth;
+      return;
+    }
+    if (currentDepth > lastHistoryDepthRef.current && activeSet) {
+      window.history.pushState(
+        {
+          appManaged: true,
+          view: 'surgical',
+          sub: { activeSetId: activeSet.id },
+        },
+        '',
+        '#surgical'
+      );
+    }
+    lastHistoryDepthRef.current = currentDepth;
+  }, [activeSet]);
+
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const st = e.state as any;
+      if (st?.appManaged && st.view === 'surgical') {
+        isPoppingHistoryRef.current = true;
+        const setId = st.sub?.activeSetId;
+        if (setId) {
+          setActiveSet(sets.find((s) => s.id === setId) || null);
+        } else {
+          setActiveSet(null);
+        }
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [sets]);
+
   // Load data
   const loadData = () => {
     // If previously initialized sample set exists, clean it up if it has sample ID

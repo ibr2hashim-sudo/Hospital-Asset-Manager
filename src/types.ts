@@ -243,3 +243,34 @@ export interface AuditSession {
   updatedAt: string;
   syncedAt?: string;
 }
+
+export type SystemFontFamily =
+  | 'Tajawal'
+  | 'Cairo'
+  | 'IBM Plex Sans Arabic'
+  | 'Almarai'
+  | 'Readex Pro';
+
+export type SystemFontSizeScale = 'compact' | 'normal' | 'comfortable';
+
+export interface NavTabLabels {
+  dashboard: string;
+  assets: string;
+  tickets: string;
+  periodic: string;
+  audit: string;
+  surgical: string;
+  users: string;
+}
+
+export interface SystemSettings {
+  systemTitle: string;
+  systemSubtitle: string;
+  logoDataUrl?: string;
+  fontFamily: SystemFontFamily;
+  fontSizeScale: SystemFontSizeScale;
+  headerDensity: 'normal' | 'compact';
+  tabLabels: NavTabLabels;
+  updatedAt?: string;
+}
+

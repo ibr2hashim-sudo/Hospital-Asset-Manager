@@ -1,27 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Building2,
-  LayoutDashboard,
-  Boxes,
-  Wrench,
-  Calendar,
-  Users,
-  History,
-  Settings,
-  RefreshCw,
-  RotateCcw,
-  Cloud,
-  CloudOff,
-  UserCheck,
-  AlertOctagon,
-  Scissors,
-  WifiOff,
   Mail,
   Phone,
 } from 'lucide-react';
-import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, User } from './types';
+import { Asset, MaintenanceTicket, PeriodicMaintenanceRecord, SystemSettings, User } from './types';
 import { StorageService } from './services/storage';
 import { FirestoreSyncService } from './services/firestoreSync';
+import { SystemSettingsService } from './services/systemSettings';
 import { Navbar } from './components/Navbar';
 import { LoginView } from './components/LoginView';
 import { DashboardView } from './components/DashboardView';
@@ -37,6 +23,13 @@ import { FactoryResetModal } from './components/FactoryResetModal';
 
 type ActiveView = 'dashboard' | 'assets' | 'tickets' | 'periodic' | 'audit' | 'surgical' | 'users';
 
+const VALID_VIEWS: ActiveView[] = ['dashboard', 'assets', 'tickets', 'periodic', 'audit', 'surgical', 'users'];
+
+function parseViewFromHash(hash: string): ActiveView {
+  const clean = (hash || '').replace(/^#\/?/, '').split('/')[0] as ActiveView;
+  return VALID_VIEWS.includes(clean) ? clean : 'dashboard';
+}
+
 export default function App() {
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(StorageService.getCurrentUser());
@@ -47,9 +40,16 @@ export default function App() {
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [systemSettings, setSystemSettings] = useState<SystemSettings>(() => {
+    const s = SystemSettingsService.getSettings();
+    SystemSettingsService.applyToDocument(s);
+    return s;
+  });
 
-  // Active Navigation View
-  const [activeView, setActiveView] = useState<ActiveView>('dashboard');
+  // Active Navigation View synced with URL Hash & Browser History
+  const [activeView, setActiveView] = useState<ActiveView>(() =>
+    parseViewFromHash(typeof window !== 'undefined' ? window.location.hash : '')
+  );
 
   // Modal Triggers
   const [showSyncModal, setShowSyncModal] = useState(false);
@@ -59,6 +59,55 @@ export default function App() {
   // Cross-view action state (e.g. create ticket for specific asset)
   const [ticketTargetAsset, setTicketTargetAsset] = useState<Asset | null>(null);
 
+  // Navigate to a primary view and push a browser history entry so Back button works naturally
+  const navigateToView = useCallback(
+    (nextView: ActiveView) => {
+      const target = VALID_VIEWS.includes(nextView) ? nextView : 'dashboard';
+      if (target !== activeView || window.history.state?.sub || window.history.state?.modal) {
+        window.history.pushState(
+          { appManaged: true, view: target, modal: null, sub: null },
+          '',
+          `#${target}`
+        );
+      }
+      setShowSyncModal(false);
+      setShowHistoryModal(false);
+      setShowFactoryResetModal(false);
+      setActiveView(target);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [activeView]
+  );
+
+  const openAppModal = useCallback(
+    (modal: 'sync' | 'history' | 'reset') => {
+      window.history.pushState(
+        {
+          appManaged: true,
+          view: activeView,
+          modal,
+          sub: window.history.state?.sub || null,
+        },
+        '',
+        `#${activeView}`
+      );
+      if (modal === 'sync') setShowSyncModal(true);
+      if (modal === 'history') setShowHistoryModal(true);
+      if (modal === 'reset') setShowFactoryResetModal(true);
+    },
+    [activeView]
+  );
+
+  const closeAppModal = useCallback((modal: 'sync' | 'history' | 'reset') => {
+    if (window.history.state?.modal === modal) {
+      window.history.back();
+      return;
+    }
+    if (modal === 'sync') setShowSyncModal(false);
+    if (modal === 'history') setShowHistoryModal(false);
+    if (modal === 'reset') setShowFactoryResetModal(false);
+  }, []);
+
   // Reload all data from StorageService
   const reloadData = useCallback(() => {
     setAssets(StorageService.getAssets());
@@ -67,6 +116,43 @@ export default function App() {
     setUsers(StorageService.getUsers());
     setPendingSyncCount(StorageService.getPendingSyncCount());
     setCurrentUser(StorageService.getCurrentUser());
+    const latestSettings = SystemSettingsService.getSettings();
+    SystemSettingsService.applyToDocument(latestSettings);
+    setSystemSettings(latestSettings);
+  }, []);
+
+  // Ensure initial history state and listen to browser Back / Forward (popstate)
+  useEffect(() => {
+    const initial = parseViewFromHash(window.location.hash);
+    if (!window.history.state?.appManaged) {
+      window.history.replaceState(
+        { appManaged: true, view: initial, modal: null, sub: null },
+        '',
+        `#${initial}`
+      );
+    }
+
+    const handlePopState = (e: PopStateEvent) => {
+      const st = e.state as { appManaged?: boolean; view?: ActiveView; modal?: string | null } | null;
+      const targetView = st?.view || parseViewFromHash(window.location.hash);
+      setShowSyncModal(st?.modal === 'sync');
+      setShowHistoryModal(st?.modal === 'history');
+      setShowFactoryResetModal(st?.modal === 'reset');
+      setActiveView(VALID_VIEWS.includes(targetView) ? targetView : 'dashboard');
+    };
+
+    const handleSettingsUpdated = () => {
+      const latest = SystemSettingsService.getSettings();
+      SystemSettingsService.applyToDocument(latest);
+      setSystemSettings(latest);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('system-settings-updated', handleSettingsUpdated);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('system-settings-updated', handleSettingsUpdated);
+    };
   }, []);
 
   // Initial load & real-time sync with user's Firebase
@@ -93,7 +179,7 @@ export default function App() {
   // Navigate directly to create ticket for an asset
   const handleCreateTicketForAsset = (asset: Asset) => {
     setTicketTargetAsset(asset);
-    setActiveView('tickets');
+    navigateToView('tickets');
   };
 
   // Pending ticket notification count (Only for Admin + Maintenance Technician)
@@ -109,19 +195,25 @@ export default function App() {
         onLogin={(user) => {
           setCurrentUser(user);
           reloadData();
+          window.history.replaceState(
+            { appManaged: true, view: 'dashboard', modal: null, sub: null },
+            '',
+            '#dashboard'
+          );
+          setActiveView('dashboard');
         }}
       />
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-100/70 text-slate-900 font-['Tajawal',sans-serif] text-right flex flex-col justify-between" dir="rtl">
-      {/* Top Main Navigation Bar */}
+    <div className="min-h-screen bg-slate-100/70 text-slate-900 font-app text-right flex flex-col justify-between" dir="rtl">
+      {/* Top Main Navigation Bar (Single Unified Header) */}
       <div className="print:hidden">
         <Navbar
           currentUser={currentUser}
           activeTab={activeView}
-          setActiveTab={(tab: string) => setActiveView(tab as ActiveView)}
+          setActiveTab={(tab: string) => navigateToView(tab as ActiveView)}
           isOnline={isOnline}
           isSyncing={isSyncing}
           pendingCount={pendingSyncCount}
@@ -138,14 +230,17 @@ export default function App() {
               })
               .finally(() => setIsSyncing(false));
           }}
-          onOpenHistory={() => setShowHistoryModal(true)}
-          onOpenReset={() => setShowFactoryResetModal(true)}
-          onOpenSyncSettings={() => setShowSyncModal(true)}
+          onOpenHistory={() => openAppModal('history')}
+          onOpenReset={() => openAppModal('reset')}
+          onOpenSyncSettings={() => openAppModal('sync')}
           onLogout={() => {
             StorageService.logout();
             reloadData();
           }}
           ticketPendingCount={pendingTicketsCount}
+          assetsCount={assets.length}
+          usersCount={users.length}
+          systemSettings={systemSettings}
         />
       </div>
 
@@ -161,108 +256,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Primary View Switcher Navigation Pills */}
-        <div className="bg-white rounded-2xl p-1.5 border border-slate-200/80 shadow-xs flex items-center gap-1 overflow-x-auto text-xs font-bold print:hidden">
-          <button
-            onClick={() => setActiveView('dashboard')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
-              activeView === 'dashboard'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-            }`}
-          >
-            <LayoutDashboard className="w-4 h-4" />
-            لوحة المؤشرات والإحصائيات
-          </button>
-
-          <button
-            onClick={() => setActiveView('assets')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
-              activeView === 'assets'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-            }`}
-          >
-            <Boxes className="w-4 h-4" />
-            سجل الأصول والعهد ({assets.length})
-          </button>
-
-          <button
-            onClick={() => setActiveView('tickets')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
-              activeView === 'tickets'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-            }`}
-          >
-            <Wrench className="w-4 h-4" />
-            <span>طلبات الصيانة وبلاغات الأعطال</span>
-            {pendingTicketsCount > 0 && (
-              <span className="px-2 py-0.5 rounded-full text-[10px] bg-red-500 text-white font-bold animate-pulse">
-                {pendingTicketsCount} معلق
-              </span>
-            )}
-          </button>
-
-          {/* Periodic Maintenance (Admin & Tech only) */}
-          {currentUser?.role !== 'supervisor' && (
-            <button
-              onClick={() => setActiveView('periodic')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
-                activeView === 'periodic'
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <Calendar className="w-4 h-4" />
-              الصيانة الدورية والوقائية
-            </button>
-          )}
-
-          {/* Inventory Audit (Admin & Tech only) */}
-          {(currentUser?.role === 'admin' || currentUser?.role === 'technician') && (
-            <button
-              onClick={() => setActiveView('audit')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
-                activeView === 'audit'
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <UserCheck className="w-4 h-4 text-emerald-400" />
-              الجرد والمطابقة
-            </button>
-          )}
-
-          {/* Surgical Sets & Instruments */}
-          <button
-            onClick={() => setActiveView('surgical')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
-              activeView === 'surgical'
-                ? 'bg-slate-900 text-white shadow-sm'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-            }`}
-          >
-            <Scissors className="w-4 h-4 text-indigo-400" />
-            <span>السيتات والأدوات الجراحية</span>
-          </button>
-
-          {/* User Management (Admin only) */}
-          {currentUser?.role === 'admin' && (
-            <button
-              onClick={() => setActiveView('users')}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all whitespace-nowrap ${
-                activeView === 'users'
-                  ? 'bg-slate-900 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <Users className="w-4 h-4" />
-              إدارة المستخدمين ({users.length})
-            </button>
-          )}
-        </div>
-
         {/* ========================================================================= */}
         {/* ACTIVE VIEW RENDERING */}
         {/* ========================================================================= */}
@@ -276,14 +269,14 @@ export default function App() {
             users={users}
             periodicRecords={periodicRecords}
             historyLogs={StorageService.getHistory()}
-            onNavigate={(view) => setActiveView(view as ActiveView)}
+            onNavigate={(view) => navigateToView(view as ActiveView)}
             onOpenNewTicket={() => {
               setTicketTargetAsset(null);
-              setActiveView('tickets');
+              navigateToView('tickets');
             }}
-            onOpenNewAsset={() => setActiveView('assets')}
-            onOpenNewUser={() => setActiveView('users')}
-            onOpenImport={() => setActiveView('assets')}
+            onOpenNewAsset={() => navigateToView('assets')}
+            onOpenNewUser={() => navigateToView('users')}
+            onOpenImport={() => navigateToView('assets')}
             onManualSync={() => {
               setIsSyncing(true);
               StorageService.triggerManualSync()
@@ -406,24 +399,24 @@ export default function App() {
       {showSyncModal && (
         <SyncSettingsModal
           currentUser={currentUser}
-          onClose={() => setShowSyncModal(false)}
+          onClose={() => closeAppModal('sync')}
           onRefresh={reloadData}
         />
       )}
 
       {/* History Log Modal (Admin only) */}
       {showHistoryModal && currentUser?.role === 'admin' && (
-        <HistoryModal onClose={() => setShowHistoryModal(false)} />
+        <HistoryModal onClose={() => closeAppModal('history')} />
       )}
 
       {/* Factory Reset Modal (Admin only) */}
       {showFactoryResetModal && (
         <FactoryResetModal
-          onClose={() => setShowFactoryResetModal(false)}
+          onClose={() => closeAppModal('reset')}
           onResetComplete={() => {
             setShowFactoryResetModal(false);
             reloadData();
-            setActiveView('dashboard');
+            navigateToView('dashboard');
           }}
         />
       )}

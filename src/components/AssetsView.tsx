@@ -137,6 +137,60 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     return Object.keys(departmentsHierarchy).sort((a, b) => a.localeCompare(b, 'ar'));
   }, [departmentsHierarchy]);
 
+  // Browser History Integration for Back Button (Department -> SubDept -> Asset Detail)
+  const isPoppingHistoryRef = useRef(false);
+  const lastHistoryDepthRef = useRef(0);
+
+  useEffect(() => {
+    const currentDepth =
+      showDetailModal && selectedAssetDetail ? 3 : selectedSubDept ? 2 : selectedDept ? 1 : 0;
+
+    if (isPoppingHistoryRef.current) {
+      isPoppingHistoryRef.current = false;
+      lastHistoryDepthRef.current = currentDepth;
+      return;
+    }
+
+    if (currentDepth > lastHistoryDepthRef.current) {
+      window.history.pushState(
+        {
+          appManaged: true,
+          view: 'assets',
+          sub: {
+            dept: selectedDept,
+            subDept: selectedSubDept,
+            detailId: showDetailModal ? selectedAssetDetail?.id || null : null,
+          },
+        },
+        '',
+        '#assets'
+      );
+    }
+    lastHistoryDepthRef.current = currentDepth;
+  }, [selectedDept, selectedSubDept, showDetailModal, selectedAssetDetail]);
+
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const st = e.state as any;
+      if (st?.appManaged && st.view === 'assets') {
+        isPoppingHistoryRef.current = true;
+        const sub = st.sub || {};
+        setSelectedDept(sub.dept || null);
+        setSelectedSubDept(sub.subDept || null);
+        if (sub.detailId) {
+          const found = accessibleAssets.find((a) => a.id === sub.detailId) || null;
+          setSelectedAssetDetail(found);
+          setShowDetailModal(Boolean(found));
+        } else {
+          setShowDetailModal(false);
+          setSelectedAssetDetail(null);
+        }
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [accessibleAssets]);
+
   // Handle Clicking on a Main Department
   const handleSelectDepartment = (deptName: string) => {
     const subs = Array.from(departmentsHierarchy[deptName] || []);

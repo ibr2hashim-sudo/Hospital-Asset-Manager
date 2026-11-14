@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaintenanceTicket } from '../types';
-import { Shield, Wrench, CheckCircle2, FileText } from 'lucide-react';
+import { SystemSettingsService } from '../services/systemSettings';
 
 interface MaintenanceReportTemplateProps {
   ticket: MaintenanceTicket;
@@ -54,20 +54,30 @@ export const MaintenanceReportTemplate: React.FC<MaintenanceReportTemplateProps>
   id = 'maintenance-report-pdf-template',
 }) => {
   const { completedDateText, durationText } = getOrComputeRepairDuration(ticket);
+  const sysSettings = SystemSettingsService.getSettings();
 
   return (
     <div
       id={id}
       dir="rtl"
-      className="bg-white text-slate-900 p-8 max-w-[210mm] min-h-[297mm] mx-auto text-right font-['Tajawal',sans-serif] border border-slate-300 shadow-none leading-normal"
+      className="bg-white text-slate-900 p-8 max-w-[210mm] min-h-[297mm] mx-auto text-right font-app border border-slate-300 shadow-none leading-normal"
       style={{ boxSizing: 'border-box' }}
     >
       {/* Official Header */}
-      <div className="border-b-2 border-slate-900 pb-4 mb-6 flex items-center justify-between">
-        <div className="space-y-1">
-          <h2 className="text-lg font-black text-slate-900">قسم الهندسة الطبية وإدارة الصيانة</h2>
-          <p className="text-xs font-semibold text-slate-600">نظام إدارة الأصول والعهد وبلاغات الأعطال</p>
-          <p className="text-[11px] text-slate-500">سجل الصيانة الشامل وتوثيق الإصلاحات الفنية</p>
+      <div className="border-b-2 border-slate-900 pb-4 mb-6 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          {sysSettings.logoDataUrl && (
+            <img
+              src={sysSettings.logoDataUrl}
+              alt={sysSettings.systemTitle}
+              className="w-12 h-12 object-contain rounded-lg border border-slate-200 p-0.5 bg-white shrink-0"
+            />
+          )}
+          <div className="space-y-1">
+            <h2 className="text-lg font-black text-slate-900">قسم الهندسة الطبية وإدارة الصيانة</h2>
+            <p className="text-xs font-semibold text-slate-600">{sysSettings.systemTitle}</p>
+            <p className="text-[11px] text-slate-500">سجل الصيانة الشامل وتوثيق الإصلاحات الفنية</p>
+          </div>
         </div>
 
         <div className="text-left space-y-1">

@@ -12,9 +12,10 @@ import {
   RefreshCw,
   CheckCircle2,
 } from 'lucide-react';
-import { User } from '../types';
+import { SystemSettings, User } from '../types';
 import { StorageService } from '../services/storage';
 import { FirestoreSyncService } from '../services/firestoreSync';
+import { SystemSettingsService } from '../services/systemSettings';
 
 interface LoginViewProps {
   users?: User[];
@@ -33,17 +34,36 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
     type: 'success' | 'error' | 'info';
   } | null>(null);
 
+  const [systemSettings, setSystemSettings] = useState<SystemSettings>(() => {
+    const s = SystemSettingsService.getSettings();
+    SystemSettingsService.applyToDocument(s);
+    return s;
+  });
+
   useEffect(() => {
     let mounted = true;
-    const autoSyncUsers = async () => {
+    const handleSettingsUpdate = () => {
+      if (mounted) {
+        setSystemSettings(SystemSettingsService.getSettings());
+      }
+    };
+    window.addEventListener('system-settings-updated', handleSettingsUpdate);
+
+    const autoSyncUsersAndBranding = async () => {
       setIsSyncingUsers(true);
       try {
-        const res = await FirestoreSyncService.syncUsersFromCloud();
-        if (mounted && res.success && res.updatedCount > 0) {
-          setSyncStatusMsg({
-            text: `تم جلب وتحديث حسابات المستخدمين من السحابة (${res.count} حساب).`,
-            type: 'info',
-          });
+        const [usersRes] = await Promise.all([
+          FirestoreSyncService.syncUsersFromCloud(),
+          FirestoreSyncService.syncSystemSettingsFromCloud(),
+        ]);
+        if (mounted) {
+          setSystemSettings(SystemSettingsService.getSettings());
+          if (usersRes.success && usersRes.updatedCount > 0) {
+            setSyncStatusMsg({
+              text: `تم جلب وتحديث حسابات المستخدمين من السحابة (${usersRes.count} حساب).`,
+              type: 'info',
+            });
+          }
         }
       } finally {
         if (mounted) {
@@ -51,9 +71,10 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
         }
       }
     };
-    autoSyncUsers();
+    autoSyncUsersAndBranding();
     return () => {
       mounted = false;
+      window.removeEventListener('system-settings-updated', handleSettingsUpdate);
     };
   }, []);
 
@@ -119,7 +140,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
   return (
     <div
       id="login-view-container"
-      className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4 sm:p-6 font-['Tajawal',sans-serif] text-right relative overflow-hidden select-none"
+      className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-4 sm:p-6 font-app text-right relative overflow-hidden select-none"
       dir="rtl"
     >
       {/* Background Decorative Ambient Gradients */}
@@ -131,15 +152,23 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
       <div className="w-full max-w-md bg-slate-900/90 backdrop-blur-xl border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl relative z-10 space-y-6">
         {/* Brand Header */}
         <div className="text-center space-y-3">
-          <div className="inline-flex p-3 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-lg shadow-blue-500/25 ring-4 ring-blue-500/10">
-            <Package className="w-8 h-8" />
+          <div className="inline-flex w-16 h-16 items-center justify-center rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 text-white shadow-lg shadow-blue-500/25 ring-4 ring-blue-500/10 overflow-hidden">
+            {systemSettings.logoDataUrl ? (
+              <img
+                src={systemSettings.logoDataUrl}
+                alt={systemSettings.systemTitle}
+                className="w-full h-full object-contain bg-white p-1"
+              />
+            ) : (
+              <Package className="w-8 h-8" />
+            )}
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white tracking-wide">
-              نظام إدارة الأصول والصيانة
+              {systemSettings.systemTitle}
             </h1>
             <p className="text-xs text-slate-400 mt-1">
-              منظومة تتبع العهد وبلاغات الأعطال والصيانة الوقائية
+              {systemSettings.systemSubtitle}
             </p>
           </div>
         </div>
