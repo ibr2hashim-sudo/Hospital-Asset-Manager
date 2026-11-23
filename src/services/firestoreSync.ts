@@ -59,6 +59,7 @@ interface SyncMetaDoc {
   recentChanges?: RecentChange[];
   assetsCount?: number;
   ticketsCount?: number;
+  fullResetAt?: number;
 }
 
 const LOCAL_SYNC_STORAGE = {
@@ -210,6 +211,23 @@ export class FirestoreSyncService {
         localStorage.getItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS) || '0',
         10
       );
+
+      // Handle remote Full Factory Reset propagated from another admin device
+      if (meta.fullResetAt && meta.fullResetAt > lastProcessedTs) {
+        console.log('[Firestore]: Remote full factory reset detected. Clearing local device data while keeping appearance...');
+        await StorageService.clearLocalOperationalData({
+          resetUsersToDefault: true,
+          clearSyncFlags: false,
+        });
+        await this.syncUsersFromCloud();
+        await this.syncSystemSettingsFromCloud();
+        localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(meta.fullResetAt));
+        localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+        if (this.onDataChangedCallback) {
+          this.onDataChangedCallback();
+        }
+        return;
+      }
 
       const recentChanges = Array.isArray(meta.recentChanges) ? meta.recentChanges : [];
       if (recentChanges.length === 0) return;
@@ -1720,6 +1738,83 @@ export class FirestoreSyncService {
         success: false,
         message: `فشل تنزيل الصور من السحابة: ${err?.message || 'خطأ غير متوقع'}`,
         count: 0,
+      };
+    }
+  }
+
+  private static async deleteCollectionInBatches(colName: string): Promise<number> {
+    const snap = await getDocs(collection(db, colName));
+    if (snap.empty) return 0;
+
+    const docs = snap.docs;
+    const CHUNK = 400;
+    for (let i = 0; i < docs.length; i += CHUNK) {
+      const batch = writeBatch(db);
+      docs.slice(i, i + CHUNK).forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    }
+    return docs.length;
+  }
+
+  /**
+   * Full Cloud Wipe for Factory Reset:
+   * Deletes all operational collections & extra users & cloud images,
+   * restores ONLY defaultAdmin and default categories,
+   * and PRESERVES settings/branding (appearance, logo, fonts, window labels).
+   */
+  static async wipeAllCloudDataKeepingAppearance(
+    defaultAdmin: User
+  ): Promise<{ success: boolean; message: string; resetAt?: number }> {
+    try {
+      const collectionsToWipe = [
+        'assets',
+        'tickets',
+        'periodic_records',
+        'audit_sessions',
+        'surgical_sets',
+        'surgical_instruments',
+        'asset_cloud_images',
+        'users',
+      ];
+
+      let deletedDocs = 0;
+      for (const colName of collectionsToWipe) {
+        deletedDocs += await this.deleteCollectionInBatches(colName);
+      }
+
+      // Restore only the default admin user in cloud
+      await setDoc(doc(db, 'users', defaultAdmin.id), cleanForFirestore(defaultAdmin));
+
+      // Reset periodic categories to defaults (keep settings/branding intact!)
+      await setDoc(doc(db, 'settings', 'categories'), {
+        list: ['التكييف', 'الزيوت والفلاتر', 'البطاريات'],
+        updatedAt: new Date().toISOString(),
+      });
+
+      const resetAt = Date.now();
+      await setDoc(doc(db, 'settings', 'sync_meta'), {
+        version: resetAt,
+        lastUpdated: new Date(resetAt).toISOString(),
+        recentChanges: [],
+        assetsCount: 0,
+        ticketsCount: 0,
+        fullResetAt: resetAt,
+      });
+
+      this.backendUnavailable = false;
+      this.quotaExceeded = false;
+      this.notifyStatusChange();
+
+      return {
+        success: true,
+        resetAt,
+        message: `تم مسح (${deletedDocs} سجل وصورة) من السحابة بنجاح مع الاحتفاظ بإعدادات المظهر والشعار.`,
+      };
+    } catch (err: any) {
+      this.handleSyncError('wipeAllCloudDataKeepingAppearance', err);
+      return {
+        success: false,
+        message: `تعذر مسح البيانات من السحابة: ${err?.message || 'تحقق من الاتصال بالإنترنت ثم أعد المحاولة'}`,
       };
     }
   }

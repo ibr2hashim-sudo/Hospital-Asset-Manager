@@ -2312,24 +2312,30 @@ export class StorageService {
     });
   }
 
-  // Factory Reset (Admin Only)
-  static factoryReset(adminPassword: string): { success: boolean; message: string } {
+  static verifyAdminPassword(adminPassword: string): boolean {
+    const trimmed = adminPassword.trim();
+    if (!trimmed) return false;
     const users = this.getUsers();
     const currentUser = this.getCurrentUser();
     const adminUser = users.find((u) => u.username.toLowerCase() === 'admin');
-    
-    const isValid = 
-      (adminUser && adminUser.password === adminPassword.trim()) ||
-      (currentUser && currentUser.role === 'admin' && currentUser.password === adminPassword.trim()) ||
-      adminPassword.trim() === 'MAINADMIN' ||
-      adminPassword.trim() === 'admin' ||
-      adminPassword.trim() === '123456';
 
-    if (!isValid) {
-      return { success: false, message: 'كلمة مرور الأدمن غير صحيحة، يرجى كتابة كلمة مرور حساب مدير النظام بدقة.' };
-    }
+    return Boolean(
+      (adminUser && adminUser.password === trimmed) ||
+        (currentUser && currentUser.role === 'admin' && currentUser.password === trimmed) ||
+        trimmed === 'MAINADMIN' ||
+        trimmed === 'admin' ||
+        trimmed === '123456'
+    );
+  }
 
-    // Reset everything in localStorage
+  /**
+   * Clears all operational data & cached images from this browser ONLY.
+   * Always preserves appearance/branding settings (asset_mgmt_system_settings).
+   */
+  static async clearLocalOperationalData(options?: {
+    resetUsersToDefault?: boolean;
+    clearSyncFlags?: boolean;
+  }): Promise<void> {
     localStorage.removeItem(STORAGE_KEYS.ASSETS);
     localStorage.removeItem(STORAGE_KEYS.TICKETS);
     localStorage.removeItem(STORAGE_KEYS.PERIODIC);
@@ -2337,23 +2343,149 @@ export class StorageService {
     localStorage.removeItem(STORAGE_KEYS.HISTORY);
     localStorage.removeItem(STORAGE_KEYS.PENDING_QUEUE);
     localStorage.removeItem(STORAGE_KEYS.CATEGORIES);
+    localStorage.removeItem(STORAGE_KEYS.SURGICAL_SETS);
+    localStorage.removeItem(STORAGE_KEYS.SURGICAL_INSTRUMENTS);
+    localStorage.removeItem('asset_synced_images_timestamps');
+    localStorage.removeItem('last_cloud_pull_iso');
 
-    // Clear IndexedDB images as well
-    clearImageDB().catch((err) => console.warn('Could not clear Image DB:', err));
+    if (options?.clearSyncFlags) {
+      localStorage.removeItem('eco_sync_last_processed_ts');
+      localStorage.removeItem('eco_sync_initialized_user_db');
+    }
 
-    // Reset users to only default admin
-    setItem(STORAGE_KEYS.USERS, DEFAULT_USERS);
-    this.setCurrentUser(DEFAULT_USERS[0]);
+    try {
+      await clearImageDB();
+    } catch (err) {
+      console.warn('Could not clear Image DB:', err);
+    }
+
+    if (options?.resetUsersToDefault) {
+      const freshAdmin: User = {
+        ...DEFAULT_USERS[0],
+        createdAt: new Date().toISOString(),
+      };
+      setItem(STORAGE_KEYS.USERS, [freshAdmin]);
+      this.setCurrentUser(freshAdmin);
+    }
+  }
+
+  /**
+   * Option A inside Factory Reset modal:
+   * Local Cache Reset & Clean Resync from Cloud (does NOT delete cloud data, preserves appearance settings).
+   */
+  static async resetLocalAndResyncFromCloud(
+    adminPassword: string
+  ): Promise<{ success: boolean; message: string }> {
+    if (!this.verifyAdminPassword(adminPassword)) {
+      return {
+        success: false,
+        message: 'كلمة مرور الأدمن غير صحيحة، يرجى كتابة كلمة مرور حساب مدير النظام بدقة.',
+      };
+    }
+
+    const prevUser = this.getCurrentUser();
+    const backupUsers = this.getUsers();
+
+    await this.clearLocalOperationalData({
+      resetUsersToDefault: false,
+      clearSyncFlags: true,
+    });
+    localStorage.removeItem(STORAGE_KEYS.USERS);
+
+    const pullRes = await FirestoreSyncService.pullAllCloudDataToLocal();
+    if (!pullRes.success) {
+      // Restore user session so admin is not locked out if offline
+      if (backupUsers.length > 0) {
+        setItem(STORAGE_KEYS.USERS, backupUsers);
+      }
+      if (prevUser) {
+        this.setCurrentUser(prevUser);
+      }
+      return {
+        success: false,
+        message: `تم مسح الكاش المحلي، لكن تعذر جلب البيانات من السحابة (${pullRes.message}). تأكد من الاتصال بالإنترنت ثم اضغط جلب من السحابة.`,
+      };
+    }
+
+    const syncedUsers = this.getUsers();
+    if (prevUser) {
+      const matched = syncedUsers.find(
+        (u) => u.id === prevUser.id || u.username.toLowerCase() === prevUser.username.toLowerCase()
+      );
+      if (matched) {
+        this.setCurrentUser(matched);
+      } else if (syncedUsers.length > 0) {
+        const fallbackAdmin = syncedUsers.find((u) => u.role === 'admin') || syncedUsers[0];
+        this.setCurrentUser(fallbackAdmin);
+      }
+    }
 
     this.addHistoryLog(
       'نظام',
-      'إعادة ضبط المصنع الشامل (Data Reset)',
-      'تم مسح كافة البيانات وتصفير النظام بالكامل والعودة للوضع التمهيدي بواسطة الأدمن',
-      DEFAULT_USERS[0].fullName,
+      'تصفير الكاش المحلي وإعادة المزامنة من السحابة',
+      'تم تنظيف بيانات الجهاز المحلي وإعادة جلب نسخة مطابقة من السحابة مع الاحتفاظ بإعدادات المظهر',
+      this.getCurrentUser()?.fullName || DEFAULT_USERS[0].fullName,
       'admin'
     );
 
-    return { success: true, message: 'تمت إعادة ضبط المصنع ومسح جميع البيانات والعهد والصور بنجاح.' };
+    return {
+      success: true,
+      message: `تم تصفير الجهاز المحلي وإعادة المزامنة من السحابة بنجاح مع الاحتفاظ بإعدادات المظهر. (${pullRes.message})`,
+    };
+  }
+
+  /**
+   * Option B inside Factory Reset modal:
+   * Full Factory Reset (Cloud + Local Wipe, keeping appearance/branding settings intact).
+   */
+  static async factoryReset(
+    adminPassword: string
+  ): Promise<{ success: boolean; message: string }> {
+    if (!this.verifyAdminPassword(adminPassword)) {
+      return {
+        success: false,
+        message: 'كلمة مرور الأدمن غير صحيحة، يرجى كتابة كلمة مرور حساب مدير النظام بدقة.',
+      };
+    }
+
+    const freshAdmin: User = {
+      ...DEFAULT_USERS[0],
+      createdAt: new Date().toISOString(),
+    };
+
+    // 1. Wipe Firestore cloud collections first (preserving settings/branding)
+    const cloudRes = await FirestoreSyncService.wipeAllCloudDataKeepingAppearance(freshAdmin);
+    if (!cloudRes.success) {
+      return {
+        success: false,
+        message: cloudRes.message,
+      };
+    }
+
+    // 2. Wipe local storage & IndexedDB (preserving asset_mgmt_system_settings)
+    await this.clearLocalOperationalData({
+      resetUsersToDefault: true,
+      clearSyncFlags: false,
+    });
+
+    if (cloudRes.resetAt) {
+      localStorage.setItem('eco_sync_last_processed_ts', String(cloudRes.resetAt));
+    }
+    localStorage.setItem('eco_sync_initialized_user_db', 'true');
+
+    this.addHistoryLog(
+      'نظام',
+      'إعادة ضبط المصنع الشامل (محلي + سحابي)',
+      'تم مسح كافة البيانات والأصول والصيانة والجرد والسيتات الجراحية والصور والحسابات الإضافية من الجهاز والسحابة مع الاحتفاظ بإعدادات المظهر والشعار',
+      freshAdmin.fullName,
+      'admin'
+    );
+
+    return {
+      success: true,
+      message:
+        'تمت إعادة ضبط المصنع الشامل (محلي + سحابي) بنجاح، وإعادة الحساب الافتراضي Admin، مع الاحتفاظ الكامل بإعدادات المظهر والشعار والخط.',
+    };
   }
 
   // Sync Queue & Offline-First
