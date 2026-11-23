@@ -592,28 +592,39 @@ export const PeriodicMaintenanceView: React.FC<PeriodicMaintenanceViewProps> = (
 // =========================================================================
 // SUB-COMPONENT: ADD RECORD MODAL
 // =========================================================================
-interface AddPeriodicRecordModalProps {
+export interface AddPeriodicRecordModalProps {
   categories: string[];
   assets: Asset[];
   initialCategory: string;
   initialDepartment: string;
+  initialAssetId?: string;
+  lockAssetSelection?: boolean;
   currentUser: User | null;
   onClose: () => void;
   onSaved: () => void;
 }
 
-const AddPeriodicRecordModal: React.FC<AddPeriodicRecordModalProps> = ({
+export const AddPeriodicRecordModal: React.FC<AddPeriodicRecordModalProps> = ({
   categories,
   assets,
   initialCategory,
   initialDepartment,
+  initialAssetId = '',
+  lockAssetSelection = false,
   currentUser,
   onClose,
   onSaved,
 }) => {
+  const preselectedAsset = useMemo(
+    () => (initialAssetId ? assets.find((a) => a.id === initialAssetId) || null : null),
+    [assets, initialAssetId]
+  );
+
   const [category, setCategory] = useState(initialCategory || categories[0]);
-  const [department, setDepartment] = useState(initialDepartment || (assets[0]?.mainDepartment || ''));
-  const [selectedAssetId, setSelectedAssetId] = useState('');
+  const [department, setDepartment] = useState(
+    preselectedAsset?.mainDepartment || initialDepartment || (assets[0]?.mainDepartment || '')
+  );
+  const [selectedAssetId, setSelectedAssetId] = useState(preselectedAsset?.id || initialAssetId || '');
   const [maintenanceDate, setMaintenanceDate] = useState(new Date().toISOString().split('T')[0]);
   const [workDone, setWorkDone] = useState('');
   const [currentMeter, setCurrentMeter] = useState<number | ''>('');
@@ -677,8 +688,8 @@ const AddPeriodicRecordModal: React.FC<AddPeriodicRecordModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 text-right">
+    <div className="fixed inset-0 z-[60] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 text-right my-auto">
         <div className="flex items-center justify-between border-b pb-3">
           <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
             <Building2 className="w-5 h-5 text-amber-600" />
@@ -688,6 +699,23 @@ const AddPeriodicRecordModal: React.FC<AddPeriodicRecordModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {lockAssetSelection && selectedAsset && (
+          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-bold text-amber-900">الجهاز المحدد للتسجيل والأرشفة:</span>
+              <span className="font-mono font-bold text-amber-800 bg-white px-2 py-0.5 rounded border border-amber-200">
+                ID: {selectedAsset.customId}
+              </span>
+            </div>
+            <div className="font-black text-slate-900 text-sm">{selectedAsset.deviceName}</div>
+            <div className="text-[11px] text-slate-600 flex flex-wrap gap-x-3 gap-y-0.5">
+              <span>القسم: <strong>{selectedAsset.mainDepartment}</strong></span>
+              {selectedAsset.subDepartment && <span>الفرعي: <strong>{selectedAsset.subDepartment}</strong></span>}
+              {selectedAsset.model && <span>الموديل: <strong className="font-mono">{selectedAsset.model}</strong></span>}
+            </div>
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-3.5 text-xs">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -711,32 +739,36 @@ const AddPeriodicRecordModal: React.FC<AddPeriodicRecordModalProps> = ({
               <input
                 type="text"
                 required
-                disabled={currentUser?.role === 'supervisor'}
+                disabled={currentUser?.role === 'supervisor' || lockAssetSelection}
                 value={department}
                 onChange={(e) => setDepartment(e.target.value)}
                 placeholder="اسم القسم"
                 className={`w-full p-2.5 rounded-xl border border-slate-300 ${
-                  currentUser?.role === 'supervisor' ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''
+                  currentUser?.role === 'supervisor' || lockAssetSelection
+                    ? 'bg-slate-100 text-slate-500 cursor-not-allowed'
+                    : ''
                 }`}
               />
             </div>
           </div>
 
-          <div>
-            <label className="block font-bold text-slate-700 mb-1">الجهاز المرتبط (اختياري):</label>
-            <select
-              value={selectedAssetId}
-              onChange={(e) => setSelectedAssetId(e.target.value)}
-              className="w-full p-2.5 rounded-xl border border-slate-300"
-            >
-              <option value="">— صيانة عامة للموقع / بدون جهاز محدد —</option>
-              {deptAssets.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.deviceName} - ID: {a.customId} ({a.model})
-                </option>
-              ))}
-            </select>
-          </div>
+          {!lockAssetSelection && (
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">الجهاز المرتبط (اختياري):</label>
+              <select
+                value={selectedAssetId}
+                onChange={(e) => setSelectedAssetId(e.target.value)}
+                className="w-full p-2.5 rounded-xl border border-slate-300"
+              >
+                <option value="">— صيانة عامة للموقع / بدون جهاز محدد —</option>
+                {deptAssets.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.deviceName} - ID: {a.customId} ({a.model})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>

@@ -973,10 +973,12 @@ export class StorageService {
   static savePeriodicRecord(record: Omit<PeriodicMaintenanceRecord, 'id' | 'createdAt'>): PeriodicMaintenanceRecord {
     const records = this.getPeriodicRecords();
     const currentUser = this.getCurrentUser();
+    const nowIso = new Date().toISOString();
     const newRecord: PeriodicMaintenanceRecord = {
       ...record,
       id: `periodic-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
 
     records.unshift(newRecord);

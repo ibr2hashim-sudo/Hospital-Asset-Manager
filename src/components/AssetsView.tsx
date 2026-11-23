@@ -28,8 +28,10 @@ import {
   List,
   Loader2,
   Maximize2,
+  Calendar,
+  Clock,
 } from 'lucide-react';
-import { Asset, DeviceStatus, ImageImportReport, User } from '../types';
+import { Asset, DeviceStatus, ImageImportReport, PeriodicMaintenanceRecord, User } from '../types';
 import { StorageService, getImageFromDB } from '../services/storage';
 import { ExcelUtils } from '../utils/excelImportExport';
 import {
@@ -43,10 +45,12 @@ import { SyncStatusBadge } from './SyncStatusBadge';
 import { FirestoreSyncService } from '../services/firestoreSync';
 import { formatSyncTimestamp } from '../utils/syncUtils';
 import { compressImageForCloud } from '../utils/cloudImageCompressor';
+import { AddPeriodicRecordModal } from './PeriodicMaintenanceView';
 
 interface AssetsViewProps {
   currentUser: User | null;
   assets: Asset[];
+  periodicRecords?: PeriodicMaintenanceRecord[];
   onRefresh: () => void;
   onOpenNewTicketForAsset: (asset: Asset) => void;
   openAddModalTrigger?: boolean;
@@ -68,9 +72,13 @@ const DEFAULT_ACCESSORIES_PRESETS = [
 export const AssetsView: React.FC<AssetsViewProps> = ({
   currentUser,
   assets = [],
+  periodicRecords,
   onRefresh,
   onOpenNewTicketForAsset,
 }) => {
+  const canManagePeriodic = currentUser?.role === 'admin' || currentUser?.role === 'technician';
+  const [periodicTargetAsset, setPeriodicTargetAsset] = useState<Asset | null>(null);
+  const [periodicSavedBanner, setPeriodicSavedBanner] = useState<string | null>(null);
   // Navigation Hierarchy States
   // null = Main Departments View
   // selectedDept = selected main department string
@@ -1490,15 +1498,56 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       {showDetailModal && selectedAssetDetail && (
         <AssetDetailModal
           asset={selectedAssetDetail}
+          currentUser={currentUser}
+          periodicRecords={(periodicRecords ?? StorageService.getPeriodicRecords()).filter(
+            (r) =>
+              r.assetId === selectedAssetDetail.id ||
+              (r.customId &&
+                selectedAssetDetail.customId &&
+                r.customId.trim().toLowerCase() === selectedAssetDetail.customId.trim().toLowerCase())
+          )}
+          periodicSavedNotice={periodicSavedBanner}
+          onClearPeriodicNotice={() => setPeriodicSavedBanner(null)}
           onClose={() => {
             setShowDetailModal(false);
             setSelectedAssetDetail(null);
+            setPeriodicSavedBanner(null);
           }}
           onOpenTicket={() => {
             const a = selectedAssetDetail;
             setShowDetailModal(false);
             setSelectedAssetDetail(null);
+            setPeriodicSavedBanner(null);
             onOpenNewTicketForAsset(a);
+          }}
+          onOpenPeriodicMaintenance={
+            canManagePeriodic
+              ? () => {
+                  setPeriodicSavedBanner(null);
+                  setPeriodicTargetAsset(selectedAssetDetail);
+                }
+              : undefined
+          }
+        />
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: DIRECT PERIODIC MAINTENANCE ENTRY FOR ASSET (Admin & Technician) */}
+      {/* ========================================================================= */}
+      {canManagePeriodic && periodicTargetAsset && (
+        <AddPeriodicRecordModal
+          categories={StorageService.getPeriodicCategories()}
+          assets={safeAssets}
+          initialCategory={StorageService.getPeriodicCategories()[0] || 'التكييف'}
+          initialDepartment={periodicTargetAsset.mainDepartment}
+          initialAssetId={periodicTargetAsset.id}
+          lockAssetSelection={true}
+          currentUser={currentUser}
+          onClose={() => setPeriodicTargetAsset(null)}
+          onSaved={() => {
+            setPeriodicTargetAsset(null);
+            setPeriodicSavedBanner('تم تسجيل وأرشفة سجل الصيانة الدورية لهذا الجهاز بنجاح ومزامنته مع صفحة الصيانة الدورية.');
+            onRefresh();
           }}
         />
       )}
@@ -2166,11 +2215,31 @@ const AddEditAssetModal: React.FC<AddEditAssetModalProps> = ({
 // =========================================================================
 interface AssetDetailModalProps {
   asset: Asset;
+  currentUser: User | null;
+  periodicRecords: PeriodicMaintenanceRecord[];
+  periodicSavedNotice?: string | null;
+  onClearPeriodicNotice?: () => void;
   onClose: () => void;
   onOpenTicket: () => void;
+  onOpenPeriodicMaintenance?: () => void;
 }
 
-const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onOpenTicket }) => {
+const AssetDetailModal: React.FC<AssetDetailModalProps> = ({
+  asset,
+  currentUser,
+  periodicRecords,
+  periodicSavedNotice,
+  onClearPeriodicNotice,
+  onClose,
+  onOpenTicket,
+  onOpenPeriodicMaintenance,
+}) => {
+  const canManagePeriodic = currentUser?.role === 'admin' || currentUser?.role === 'technician';
+  const sortedPeriodicRecords = useMemo(() => {
+    return [...periodicRecords].sort(
+      (a, b) => new Date(b.maintenanceDate || b.createdAt).getTime() - new Date(a.maintenanceDate || a.createdAt).getTime()
+    );
+  }, [periodicRecords]);
   const [loadedImage, setLoadedImage] = useState<string | null>(() => {
     if (asset.customId) {
       const cached = getFromMemoryImageCache(asset.customId);
@@ -2514,19 +2583,133 @@ const AssetDetailModal: React.FC<AssetDetailModalProps> = ({ asset, onClose, onO
           )}
         </div>
 
+        {/* Previous Periodic Maintenance Summary (Admin & Technician only) */}
+        {canManagePeriodic && (
+          <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/80 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-black text-amber-900">
+                <Calendar className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>سجل الصيانة الدورية السابق لهذا الجهاز ({sortedPeriodicRecords.length})</span>
+              </div>
+              {onOpenPeriodicMaintenance && (
+                <button
+                  type="button"
+                  onClick={onOpenPeriodicMaintenance}
+                  className="text-[11px] font-bold text-amber-800 hover:text-amber-950 bg-amber-100 hover:bg-amber-200/80 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                >
+                  + تسجيل جديد
+                </button>
+              )}
+            </div>
+
+            {periodicSavedNotice && (
+              <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{periodicSavedNotice}</span>
+                </div>
+                {onClearPeriodicNotice && (
+                  <button
+                    type="button"
+                    onClick={onClearPeriodicNotice}
+                    className="text-emerald-600 hover:text-emerald-800"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {sortedPeriodicRecords.length === 0 ? (
+              <p className="text-[11px] text-amber-800/75">
+                لا توجد سجلات صيانة دورية مسجلة لهذا الجهاز بعد.
+              </p>
+            ) : (
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-0.5">
+                {sortedPeriodicRecords.slice(0, 5).map((rec) => (
+                  <div
+                    key={rec.id}
+                    className="p-2.5 rounded-lg bg-white border border-amber-200/70 text-[11px] space-y-1 shadow-2xs"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-bold">
+                        {rec.category}
+                      </span>
+                      <div className="flex items-center gap-2 text-slate-500 font-mono">
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 text-slate-400" />
+                          {rec.maintenanceDate}
+                        </span>
+                        {rec.performedBy && (
+                          <span className="font-sans text-slate-600 font-semibold">
+                            • {rec.performedBy}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {rec.workDone && (
+                      <p className="text-slate-700 leading-relaxed">{rec.workDone}</p>
+                    )}
+
+                    <div className="flex flex-wrap gap-2 text-[10px]">
+                      {rec.batteryChangeDate && (
+                        <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold">
+                          تغيير البطارية: <span className="font-mono">{rec.batteryChangeDate}</span>
+                        </span>
+                      )}
+                      {rec.nextExpectedChangeDate && (
+                        <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200 font-semibold">
+                          التغيير القادم: <span className="font-mono">{rec.nextExpectedChangeDate}</span>
+                        </span>
+                      )}
+                      {rec.currentMeterReading !== undefined && (
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold">
+                          العداد: <span className="font-mono">{rec.currentMeterReading}</span>
+                          {rec.nextMeterReading !== undefined && (
+                            <> ← القادم: <span className="font-mono">{rec.nextMeterReading}</span></>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {sortedPeriodicRecords.length > 5 && (
+                  <p className="text-[10px] text-amber-800 font-semibold text-center pt-0.5">
+                    يتم عرض أحدث 5 سجلات من أصل {sortedPeriodicRecords.length} سجل في الصيانة الدورية
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Modal Actions */}
-        <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-          <button
-            onClick={onOpenTicket}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-md shadow-red-600/20"
-          >
-            <Wrench className="w-4 h-4" />
-            تقديم بلاغ صيانة لهذا الجهاز
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={onOpenTicket}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-md shadow-red-600/20 cursor-pointer"
+            >
+              <Wrench className="w-4 h-4" />
+              تقديم بلاغ صيانة لهذا الجهاز
+            </button>
+
+            {canManagePeriodic && onOpenPeriodicMaintenance && (
+              <button
+                type="button"
+                onClick={onOpenPeriodicMaintenance}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-md shadow-amber-500/20 transition-colors cursor-pointer"
+              >
+                <Calendar className="w-4 h-4" />
+                تسجيل صيانة دورية
+              </button>
+            )}
+          </div>
 
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+            className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
           >
             إغلاق
           </button>
