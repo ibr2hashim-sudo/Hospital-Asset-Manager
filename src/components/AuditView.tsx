@@ -416,8 +416,26 @@ export const AuditView: React.FC<AuditViewProps> = ({
   // Handle Add New Asset during audit
   const handleSaveNewAssetDuringAudit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAssetCustomId.trim() || !newAssetDeviceName.trim() || !activeSession || !currentUser) {
-      alert('يرجى كتابة كود الجهاز واسم الجهاز على الأقل');
+    if (!activeSession || !currentUser) return;
+
+    const targetDept = (
+      newAssetMainDept.trim() ||
+      (activeSession.targetDepartment !== 'all' ? activeSession.targetDepartment.trim() : '')
+    ).trim();
+    const targetSubDept = newAssetSubDept.trim();
+    const qty = Number(newAssetQuantity);
+
+    if (
+      !newAssetCustomId.trim() ||
+      !newAssetDeviceName.trim() ||
+      !targetDept ||
+      !targetSubDept ||
+      !Number.isFinite(qty) ||
+      qty < 1
+    ) {
+      alert(
+        'يرجى استكمال كافة البيانات الإلزامية قبل الحفظ:\n• كود الجهاز\n• اسم الجهاز\n• القسم الرئيسي\n• القسم الفرعي / الغرفة\n• الكمية الفعلية (1 فأكثر)'
+      );
       return;
     }
 
@@ -426,8 +444,6 @@ export const AuditView: React.FC<AuditViewProps> = ({
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const targetDept = newAssetMainDept.trim() || (activeSession.targetDepartment !== 'all' ? activeSession.targetDepartment : 'عام');
-
     if (saveToMainAssetsRegistry) {
       const res = StorageService.addNewAssetDuringAudit(
         activeSession.id,
@@ -435,11 +451,11 @@ export const AuditView: React.FC<AuditViewProps> = ({
           customId: newAssetCustomId.trim(),
           deviceName: newAssetDeviceName.trim(),
           mainDepartment: targetDept,
-          subDepartment: newAssetSubDept.trim() || 'عام',
+          subDepartment: targetSubDept,
           model: newAssetModel.trim(),
           serialNumber: newAssetSerial.trim(),
           manufacturer: newAssetManufacturer.trim(),
-          quantity: Math.max(1, Number(newAssetQuantity || 1)),
+          quantity: Math.max(1, Math.floor(qty)),
           accessories: accessoriesList,
           status: newAssetStatus,
           custodian: newAssetCustodian.trim() || 'غير محدد',
@@ -2438,23 +2454,29 @@ export const AuditView: React.FC<AuditViewProps> = ({
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">القسم الرئيسي</label>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    القسم الرئيسي <span className="text-red-500">*</span>
+                  </label>
                   <input
                     type="text"
+                    required
                     value={newAssetMainDept}
                     onChange={(e) => setNewAssetMainDept(e.target.value)}
-                    placeholder="القسم"
+                    placeholder="مثال: العناية المركزة، العمليات..."
                     className="w-full px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 focus:outline-none font-bold"
                   />
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">القسم الفرعي / الغرفة</label>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    القسم الفرعي / الغرفة <span className="text-red-500">*</span>
+                  </label>
                   <input
                     type="text"
+                    required
                     value={newAssetSubDept}
                     onChange={(e) => setNewAssetSubDept(e.target.value)}
-                    placeholder="الغرفة أو الجناح"
+                    placeholder="الغرفة أو الجناح (إلزامي)"
                     className="w-full px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:bg-white focus:border-blue-600 focus:outline-none"
                   />
                 </div>

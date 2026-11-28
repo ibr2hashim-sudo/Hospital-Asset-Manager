@@ -30,6 +30,7 @@ import {
   Maximize2,
   Calendar,
   Clock,
+  ArrowUpDown,
 } from 'lucide-react';
 import { Asset, DeviceStatus, ImageImportReport, PeriodicMaintenanceRecord, User } from '../types';
 import { StorageService, getImageFromDB } from '../services/storage';
@@ -69,6 +70,24 @@ const DEFAULT_ACCESSORIES_PRESETS = [
   'Sensor Probe',
 ];
 
+function normalizeArabicForSort(str: string): string {
+  return (str || '')
+    .trim()
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+    .replace(/[أإآٱ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي');
+}
+
+function compareArabicKeepAl(a: string, b: string): number {
+  return normalizeArabicForSort(a).localeCompare(normalizeArabicForSort(b), 'ar', {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
+type DeptSortMode = 'alpha' | 'assets_desc' | 'faulty_desc';
+
 export const AssetsView: React.FC<AssetsViewProps> = ({
   currentUser,
   assets = [],
@@ -89,6 +108,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [deptSortMode, setDeptSortMode] = useState<DeptSortMode>('alpha');
   const [assetViewMode, setAssetViewMode] = useState<'cards' | 'table'>('cards');
 
   // Modals
@@ -102,6 +122,10 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   const [editingDeptData, setEditingDeptData] = useState<{ main: string; sub?: string; newName: string } | null>(null);
 
   const [deleteDeptConfirm, setDeleteDeptConfirm] = useState<{ main: string; sub?: string; count: number } | null>(null);
+  const [deleteDeptPassword, setDeleteDeptPassword] = useState('');
+  const [deleteDeptConfirmText, setDeleteDeptConfirmText] = useState('');
+  const [deleteDeptError, setDeleteDeptError] = useState('');
+  const [isDeletingDept, setIsDeletingDept] = useState(false);
   const [deleteAssetConfirm, setDeleteAssetConfirm] = useState<Asset | null>(null);
 
   // Bulk Image Import Modal & Progress
@@ -142,8 +166,30 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   }, [accessibleAssets]);
 
   const mainDepartmentList = useMemo(() => {
-    return Object.keys(departmentsHierarchy).sort((a, b) => a.localeCompare(b, 'ar'));
-  }, [departmentsHierarchy]);
+    const depts = Object.keys(departmentsHierarchy);
+    const statsMap = new Map<string, { total: number; faulty: number }>();
+
+    if (deptSortMode !== 'alpha') {
+      accessibleAssets.forEach((a) => {
+        const key = a.mainDepartment.trim();
+        const cur = statsMap.get(key) || { total: 0, faulty: 0 };
+        cur.total += 1;
+        if (a.status === 'عاطل') cur.faulty += 1;
+        statsMap.set(key, cur);
+      });
+    }
+
+    return depts.sort((a, b) => {
+      if (deptSortMode === 'assets_desc') {
+        const diff = (statsMap.get(b)?.total || 0) - (statsMap.get(a)?.total || 0);
+        if (diff !== 0) return diff;
+      } else if (deptSortMode === 'faulty_desc') {
+        const diff = (statsMap.get(b)?.faulty || 0) - (statsMap.get(a)?.faulty || 0);
+        if (diff !== 0) return diff;
+      }
+      return compareArabicKeepAl(a, b);
+    });
+  }, [departmentsHierarchy, accessibleAssets, deptSortMode]);
 
   // Browser History Integration for Back Button (Department -> SubDept -> Asset Detail)
   const isPoppingHistoryRef = useRef(false);
@@ -382,27 +428,63 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
     }
   };
 
-  // Department Deletion Check & Protection
+  // Department Deletion Check & Full Cloud/Local Purge Modal
   const handleAttemptDeleteDept = (mainDept: string, subDept?: string) => {
-    const check = StorageService.canDeleteDepartment(mainDept, subDept);
-    if (!check.allowed) {
-      alert(check.message);
-      return;
-    }
-    setDeleteDeptConfirm({ main: mainDept, sub: subDept, count: check.count });
+    const matched = StorageService.getDepartmentAssets(mainDept, subDept);
+    setDeleteDeptPassword('');
+    setDeleteDeptConfirmText('');
+    setDeleteDeptError('');
+    setIsDeletingDept(false);
+    setDeleteDeptConfirm({ main: mainDept, sub: subDept, count: matched.length });
   };
 
-  const confirmDeleteDept = () => {
+  const handleExportDeptBackupBeforeDelete = () => {
     if (!deleteDeptConfirm) return;
-    // It's empty, so delete is safe
-    if (selectedSubDept && deleteDeptConfirm.sub) {
-      setSelectedSubDept(null);
-    } else if (selectedDept && !deleteDeptConfirm.sub) {
-      setSelectedDept(null);
-      setSelectedSubDept(null);
+    const matched = StorageService.getDepartmentAssets(deleteDeptConfirm.main, deleteDeptConfirm.sub);
+    ExcelUtils.exportAssetsToCSV(matched);
+  };
+
+  const confirmDeleteDept = async () => {
+    if (!deleteDeptConfirm || isDeletingDept) return;
+    setDeleteDeptError('');
+
+    if (deleteDeptConfirm.count > 0) {
+      if (!deleteDeptPassword.trim()) {
+        setDeleteDeptError('يرجى إدخال كلمة مرور الأدمن لتأكيد الحذف.');
+        return;
+      }
+      if (deleteDeptConfirmText.trim() !== 'حذف القسم') {
+        setDeleteDeptError('يرجى كتابة عبارة "حذف القسم" بدقة للمتابعة.');
+        return;
+      }
     }
-    setDeleteDeptConfirm(null);
-    onRefresh();
+
+    setIsDeletingDept(true);
+    try {
+      const res = await StorageService.deleteDepartmentWithAssets(
+        deleteDeptConfirm.main,
+        deleteDeptConfirm.sub,
+        deleteDeptPassword.trim()
+      );
+      if (!res.success) {
+        setDeleteDeptError(res.message);
+        setIsDeletingDept(false);
+        return;
+      }
+
+      if (selectedSubDept && deleteDeptConfirm.sub) {
+        setSelectedSubDept(null);
+      } else if (selectedDept && !deleteDeptConfirm.sub) {
+        setSelectedDept(null);
+        setSelectedSubDept(null);
+      }
+      setDeleteDeptConfirm(null);
+      setIsDeletingDept(false);
+      onRefresh();
+    } catch (err: any) {
+      setDeleteDeptError(err?.message || 'حدث خطأ أثناء حذف القسم');
+      setIsDeletingDept(false);
+    }
   };
 
   // Rename Department
@@ -1083,19 +1165,37 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
           </button>
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <Filter className="w-3.5 h-3.5 text-slate-400" />
-          <span className="text-xs text-slate-500 font-medium">الحالة:</span>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700 focus:outline-none focus:border-blue-500"
-          >
-            <option value="all">جميع الحالات ({accessibleAssets.length})</option>
-            <option value="شغال">شغال</option>
-            <option value="عاطل">عاطل</option>
-            <option value="تالف">تالف</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+          {!searchTerm.trim() && !selectedSubDept && (
+            <div className="flex items-center gap-1.5">
+              <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-xs text-slate-500 font-medium">الترتيب:</span>
+              <select
+                value={deptSortMode}
+                onChange={(e) => setDeptSortMode(e.target.value as DeptSortMode)}
+                className="px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 focus:outline-none focus:border-blue-500"
+              >
+                <option value="alpha">أبجدي (أ–ي)</option>
+                <option value="assets_desc">الأكثر أجهزة</option>
+                <option value="faulty_desc">الأكثر أعطالاً</option>
+              </select>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1.5">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
+            <span className="text-xs text-slate-500 font-medium">الحالة:</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700 focus:outline-none focus:border-blue-500"
+            >
+              <option value="all">جميع الحالات ({accessibleAssets.length})</option>
+              <option value="شغال">شغال</option>
+              <option value="عاطل">عاطل</option>
+              <option value="تالف">تالف</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -1328,7 +1428,30 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {(Array.from(departmentsHierarchy[selectedDept] || []) as string[])
-              .sort((a, b) => a.localeCompare(b, 'ar'))
+              .sort((a, b) => {
+                if (deptSortMode !== 'alpha') {
+                  const aList = accessibleAssets.filter(
+                    (x) =>
+                      x.mainDepartment.trim() === selectedDept.trim() &&
+                      (x.subDepartment ? x.subDepartment.trim() : x.mainDepartment.trim()) === a.trim()
+                  );
+                  const bList = accessibleAssets.filter(
+                    (x) =>
+                      x.mainDepartment.trim() === selectedDept.trim() &&
+                      (x.subDepartment ? x.subDepartment.trim() : x.mainDepartment.trim()) === b.trim()
+                  );
+                  if (deptSortMode === 'assets_desc') {
+                    const diff = bList.length - aList.length;
+                    if (diff !== 0) return diff;
+                  } else if (deptSortMode === 'faulty_desc') {
+                    const diff =
+                      bList.filter((x) => x.status === 'عاطل').length -
+                      aList.filter((x) => x.status === 'عاطل').length;
+                    if (diff !== 0) return diff;
+                  }
+                }
+                return compareArabicKeepAl(a, b);
+              })
               .map((subName: string) => {
               const subAssets = accessibleAssets.filter(
                 (a) =>
@@ -1592,18 +1715,20 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL: CONFIRM DELETE DEPARTMENT */}
+      {/* MODAL: CONFIRM DELETE DEPARTMENT (Supports empty or bulk assets purge)    */}
       {/* ========================================================================= */}
       {deleteDeptConfirm && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 text-right">
             <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
               <Trash2 className="w-6 h-6" />
             </div>
             <div className="text-center">
-              <h3 className="text-base font-bold text-slate-900">تأكيد مسح القسم</h3>
+              <h3 className="text-base font-bold text-slate-900">
+                {deleteDeptConfirm.count > 0 ? 'تأكيد حذف القسم وكافة أصنافه' : 'تأكيد مسح القسم'}
+              </h3>
               <p className="text-xs text-slate-500 mt-1">
-                هل أنت متأكد من مسح القسم (
+                هل أنت متأكد من حذف القسم (
                 <span className="font-bold text-slate-800">
                   {deleteDeptConfirm.main}
                   {deleteDeptConfirm.sub ? ` / ${deleteDeptConfirm.sub}` : ''}
@@ -1611,18 +1736,86 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                 )؟
               </p>
             </div>
+
+            {deleteDeptConfirm.count > 0 && (
+              <div className="space-y-3 text-xs">
+                <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 space-y-1">
+                  <span className="font-bold block">⚠️ تنبيه هام جداً:</span>
+                  <p className="leading-relaxed">
+                    يحتوي هذا القسم حالياً على{' '}
+                    <strong className="font-mono text-sm">{deleteDeptConfirm.count}</strong> صنف/جهاز.
+                    عند المتابعة سيتم حذف القسم وكافة هذه الأصناف نهائياً من هذا الجهاز ومن السحابة وجميع الأجهزة المتصلة.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleExportDeptBackupBeforeDelete}
+                  disabled={isDeletingDept}
+                  className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Download className="w-4 h-4 text-slate-600" />
+                  تصدير أصناف القسم (CSV) كنسخة احتياطية قبل الحذف
+                </button>
+
+                {deleteDeptError && (
+                  <div className="p-2.5 rounded-xl bg-red-100 border border-red-200 text-red-700 font-bold">
+                    {deleteDeptError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    كلمة مرور الأدمن للتأكيد <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    disabled={isDeletingDept}
+                    value={deleteDeptPassword}
+                    onChange={(e) => setDeleteDeptPassword(e.target.value)}
+                    placeholder="أدخل كلمة مرور حساب الأدمن"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    اكتب عبارة التأكيد{' '}
+                    <span className="text-red-600 font-mono font-bold">"حذف القسم"</span>:
+                  </label>
+                  <input
+                    type="text"
+                    disabled={isDeletingDept}
+                    value={deleteDeptConfirmText}
+                    onChange={(e) => setDeleteDeptConfirmText(e.target.value)}
+                    placeholder="حذف القسم"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 focus:ring-2 focus:ring-red-500/20 focus:border-red-500"
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-center gap-3 pt-2">
               <button
+                type="button"
+                disabled={isDeletingDept}
                 onClick={() => setDeleteDeptConfirm(null)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 disabled:opacity-50"
               >
                 إلغاء
               </button>
               <button
+                type="button"
+                disabled={isDeletingDept}
                 onClick={confirmDeleteDept}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white shadow"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white shadow flex items-center gap-1.5 disabled:opacity-50"
               >
-                تأكيد المسح
+                {isDeletingDept && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {isDeletingDept
+                  ? 'جاري الحذف من الجهاز والسحابة...'
+                  : deleteDeptConfirm.count > 0
+                  ? `حذف القسم و (${deleteDeptConfirm.count}) صنف نهائياً`
+                  : 'تأكيد المسح'}
               </button>
             </div>
           </div>

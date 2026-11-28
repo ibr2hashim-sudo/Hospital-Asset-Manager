@@ -704,6 +704,103 @@ export class StorageService {
     return { allowed: true, count: 0 };
   }
 
+  static getDepartmentAssets(deptName: string, subDeptName?: string): Asset[] {
+    const assets = this.getAssets();
+    return assets.filter((a) => {
+      if (subDeptName) {
+        return (
+          a.mainDepartment.trim() === deptName.trim() &&
+          (a.subDepartment ? a.subDepartment.trim() : a.mainDepartment.trim()) === subDeptName.trim()
+        );
+      }
+      return a.mainDepartment.trim() === deptName.trim();
+    });
+  }
+
+  /**
+   * Deletes an entire department (or sub-department) AND all its assets locally + from Firestore cloud.
+   * Requires admin password verification whenever the department contains any assets.
+   */
+  static async deleteDepartmentWithAssets(
+    deptName: string,
+    subDeptName?: string,
+    adminPassword?: string
+  ): Promise<{ success: boolean; deletedCount: number; message: string }> {
+    const currentUser = this.getCurrentUser();
+    if (currentUser?.role !== 'admin') {
+      return { success: false, deletedCount: 0, message: 'هذه الصلاحية مخصصة لمدير النظام فقط' };
+    }
+
+    const assets = this.getAssets();
+    const matchedIds = new Set<string>();
+    const remaining: Asset[] = [];
+
+    assets.forEach((a) => {
+      const matchMain = a.mainDepartment.trim() === deptName.trim();
+      const effectiveSub = a.subDepartment ? a.subDepartment.trim() : a.mainDepartment.trim();
+      const isMatch = subDeptName ? matchMain && effectiveSub === subDeptName.trim() : matchMain;
+      if (isMatch) {
+        matchedIds.add(a.id);
+      } else {
+        remaining.push(a);
+      }
+    });
+
+    const deletedCount = matchedIds.size;
+    if (deletedCount > 0) {
+      if (!adminPassword || !this.verifyAdminPassword(adminPassword)) {
+        return {
+          success: false,
+          deletedCount: 0,
+          message: 'كلمة مرور الأدمن غير صحيحة، يرجى التحقق والمحاولة مجدداً.',
+        };
+      }
+
+      const idsToDelete = Array.from(matchedIds);
+      const cloudRes = await FirestoreSyncService.deleteAssetsBatch(idsToDelete);
+      if (!cloudRes.success) {
+        return {
+          success: false,
+          deletedCount: 0,
+          message: cloudRes.message || 'تعذر حذف أصناف القسم من السحابة، تحقق من الاتصال بالإنترنت.',
+        };
+      }
+
+      setItem(STORAGE_KEYS.ASSETS, remaining);
+
+      // Clean up orphaned local images in IndexedDB
+      const remainingCustomIds = new Set(
+        remaining.map((a) => a.customId.trim().toLowerCase())
+      );
+      assets.forEach((a) => {
+        if (matchedIds.has(a.id)) {
+          const cid = a.customId.trim().toLowerCase();
+          if (!remainingCustomIds.has(cid)) {
+            deleteImageFromDB(a.customId).catch(() => {});
+          }
+        }
+      });
+    }
+
+    const label = subDeptName ? `${deptName} / ${subDeptName}` : deptName;
+    this.addHistoryLog(
+      'أصول',
+      `حذف قسم بالكامل: ${label}`,
+      `تم حذف القسم (${label}) وكافة أصنافه (${deletedCount} صنف/جهاز) محلياً ومن السحابة`,
+      currentUser?.fullName || 'النظام',
+      currentUser?.role || 'admin'
+    );
+
+    return {
+      success: true,
+      deletedCount,
+      message:
+        deletedCount > 0
+          ? `تم حذف القسم (${label}) وعدد (${deletedCount}) صنف/جهاز نهائياً من الجهاز والسحابة.`
+          : `تم حذف القسم (${label}) بنجاح.`,
+    };
+  }
+
   // Rename department across assets
   static renameDepartment(oldDept: string, newDept: string, oldSub?: string, newSub?: string): void {
     const assets = this.getAssets();
@@ -1566,24 +1663,37 @@ export class StorageService {
     }
 
     const session = sessions[sessionIndex];
+    const cleanCode = customId.trim();
+    const cleanName = deviceName.trim();
+    const cleanMainDept = (mainDept.trim() || (session.targetDepartment !== 'all' ? session.targetDepartment.trim() : '')).trim();
+    const cleanSubDept = subDept.trim();
+    const cleanQty = Number(actualQuantity);
+
+    if (!cleanCode || !cleanName || !cleanMainDept || !cleanSubDept || !Number.isFinite(cleanQty) || cleanQty < 1) {
+      return {
+        success: false,
+        message: 'يرجى استكمال كافة الحقول الإلزامية: كود الجهاز، اسم الجهاز، القسم الرئيسي، القسم الفرعي، والكمية (1 فأكثر).',
+      };
+    }
+
     const nowStr = new Date().toISOString();
     const formattedTime = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
 
     const newItem: AuditItem = {
       id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-      customId: customId.trim(),
-      deviceName: deviceName.trim(),
-      mainDepartment: mainDept.trim() || (session.targetDepartment !== 'all' ? session.targetDepartment : 'عام'),
-      subDepartment: subDept.trim(),
+      customId: cleanCode,
+      deviceName: cleanName,
+      mainDepartment: cleanMainDept,
+      subDepartment: cleanSubDept,
       model: model.trim(),
       serialNumber: serialNumber.trim(),
       expectedCustodian: 'غير مقيد مسبقاً',
       expectedQuantity: 0,
-      actualQuantity: Math.max(1, Number(actualQuantity || 1)),
+      actualQuantity: Math.max(1, Math.floor(cleanQty)),
       status: 'جديد_غير_مسجل',
       scannedAt: `${nowStr.split('T')[0]} ${formattedTime}`,
       scannedBy: user.fullName,
-      actualDepartment: mainDept.trim() || (session.targetDepartment !== 'all' ? session.targetDepartment : 'عام'),
+      actualDepartment: cleanMainDept,
       actualCustodian: custodian.trim() || 'غير محدد',
       notes: notes || 'تم اكتشافه أثناء الجرد وغير مقيد في النظام',
       accessories: accessories.map((name) => ({ name: String(name).trim(), checked: true })),
@@ -1633,9 +1743,22 @@ export class StorageService {
       return { success: false, message: 'لا يمكن إضافة أجهزة لجلسة جرد معتمدة ومغلقة' };
     }
 
+    const cleanCode = assetData.customId.trim();
+    const cleanName = assetData.deviceName.trim();
+    const cleanMain = assetData.mainDepartment.trim();
+    const cleanSub = (assetData.subDepartment || '').trim();
+    const cleanQty = Number(assetData.quantity);
+
+    if (!cleanCode || !cleanName || !cleanMain || !cleanSub || !Number.isFinite(cleanQty) || cleanQty < 1) {
+      return {
+        success: false,
+        message: 'يرجى استكمال كافة الحقول الإلزامية: كود الجهاز، اسم الجهاز، القسم الرئيسي، القسم الفرعي، والكمية (1 فأكثر).',
+      };
+    }
+
     // Check duplicate custom ID in current session
     const existingInSession = session.items.find(
-      (i) => i.customId.trim().toLowerCase() === assetData.customId.trim().toLowerCase()
+      (i) => i.customId.trim().toLowerCase() === cleanCode.toLowerCase()
     );
     if (existingInSession) {
       return {
@@ -1648,15 +1771,15 @@ export class StorageService {
     let savedAsset: Asset;
     try {
       savedAsset = this.saveAsset({
-        customId: assetData.customId.trim(),
-        deviceName: assetData.deviceName.trim(),
-        mainDepartment: assetData.mainDepartment.trim(),
-        subDepartment: assetData.subDepartment?.trim() || 'عام',
+        customId: cleanCode,
+        deviceName: cleanName,
+        mainDepartment: cleanMain,
+        subDepartment: cleanSub,
         model: assetData.model?.trim() || '',
         serialNumber: assetData.serialNumber?.trim() || '',
         manufacturer: assetData.manufacturer?.trim() || '',
-        currentQuantity: Math.max(1, Number(assetData.quantity || 1)),
-        bookQuantity: Math.max(1, Number(assetData.quantity || 1)),
+        currentQuantity: Math.max(1, Math.floor(cleanQty)),
+        bookQuantity: Math.max(1, Math.floor(cleanQty)),
         accessories: assetData.accessories || [],
         status: assetData.status || 'شغال',
         custodian: assetData.custodian?.trim() || 'غير محدد',
@@ -1953,7 +2076,7 @@ export class StorageService {
             customId: item.customId,
             deviceName: item.deviceName,
             mainDepartment: item.actualDepartment || item.mainDepartment,
-            subDepartment: item.subDepartment || 'عام',
+            subDepartment: item.subDepartment || item.actualDepartment || item.mainDepartment,
             currentQuantity: qty,
             bookQuantity: 0,
             difference: qty,

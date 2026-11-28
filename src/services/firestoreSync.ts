@@ -60,6 +60,7 @@ interface SyncMetaDoc {
   assetsCount?: number;
   ticketsCount?: number;
   fullResetAt?: number;
+  resyncAssetsAt?: number;
 }
 
 const LOCAL_SYNC_STORAGE = {
@@ -223,6 +224,25 @@ export class FirestoreSyncService {
         await this.syncSystemSettingsFromCloud();
         localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(meta.fullResetAt));
         localStorage.setItem(LOCAL_SYNC_STORAGE.INITIALIZED_FLAG, 'true');
+        if (this.onDataChangedCallback) {
+          this.onDataChangedCallback();
+        }
+        return;
+      }
+
+      // Handle bulk asset purge (e.g., deleting an entire department with its assets)
+      if (meta.resyncAssetsAt && meta.resyncAssetsAt > lastProcessedTs) {
+        console.log('[Firestore]: Bulk asset update/purge detected. Refreshing assets list from cloud...');
+        const assetsSnap = await getDocs(collection(db, 'assets'));
+        const cloudAssets: Asset[] = [];
+        const pullNow = new Date().toISOString();
+        assetsSnap.forEach((d) => {
+          const remote = d.data() as Asset;
+          if (!remote.syncedAt) remote.syncedAt = remote.updatedAt || pullNow;
+          cloudAssets.push(remote);
+        });
+        localStorage.setItem('asset_mgmt_assets', JSON.stringify(cloudAssets));
+        localStorage.setItem(LOCAL_SYNC_STORAGE.LAST_PROCESSED_TS, String(meta.resyncAssetsAt));
         if (this.onDataChangedCallback) {
           this.onDataChangedCallback();
         }
@@ -570,6 +590,47 @@ export class FirestoreSyncService {
       });
     } catch (err) {
       this.handleSyncError('deleteAsset', err);
+    }
+  }
+
+  static async deleteAssetsBatch(
+    assetIds: string[]
+  ): Promise<{ success: boolean; deletedCount: number; message?: string }> {
+    if (!assetIds || assetIds.length === 0) {
+      return { success: true, deletedCount: 0 };
+    }
+    try {
+      const CHUNK = 400;
+      for (let i = 0; i < assetIds.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        assetIds.slice(i, i + CHUNK).forEach((id) => {
+          batch.delete(doc(db, 'assets', id));
+        });
+        await batch.commit();
+      }
+
+      const nowTs = Date.now();
+      await setDoc(
+        doc(db, 'settings', 'sync_meta'),
+        {
+          version: nowTs,
+          lastUpdated: new Date(nowTs).toISOString(),
+          resyncAssetsAt: nowTs,
+        },
+        { merge: true }
+      );
+
+      this.backendUnavailable = false;
+      this.quotaExceeded = false;
+      this.notifyStatusChange();
+      return { success: true, deletedCount: assetIds.length };
+    } catch (err: any) {
+      this.handleSyncError('deleteAssetsBatch', err);
+      return {
+        success: false,
+        deletedCount: 0,
+        message: err?.message || 'تعذر حذف الأجهزة من السحابة',
+      };
     }
   }
 

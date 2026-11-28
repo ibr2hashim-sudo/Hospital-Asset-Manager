@@ -527,7 +527,11 @@ export class ExcelUtils {
         }
 
         if (!mainDept && subDept) mainDept = subDept;
-        if (!mainDept) mainDept = 'عام';
+        if (!mainDept) {
+          result.errorCount++;
+          result.errors.push(`السطر ${rowNumber} في صفحة الأصول: القسم الرئيسي مفقود (تم تخطي الصنف "${deviceName}")`);
+          return;
+        }
         if (!subDept) subDept = mainDept;
 
         if (!customId) {
@@ -702,8 +706,8 @@ export class ExcelUtils {
             assetId: matchingAsset?.id || assetId,
             customId: assetId,
             deviceName: matchingAsset?.deviceName || 'جهاز طبي',
-            mainDepartment: matchingAsset?.mainDepartment || 'عام',
-            subDepartment: matchingAsset?.subDepartment || 'عام',
+            mainDepartment: matchingAsset?.mainDepartment || 'غير محدد',
+            subDepartment: matchingAsset?.subDepartment || 'غير محدد',
             model: matchingAsset?.model || '',
             serialNumber: matchingAsset?.serialNumber || '',
             complaintDate: createdAt ? createdAt.split(' ')[0] : new Date().toISOString().split('T')[0],
@@ -773,7 +777,7 @@ export class ExcelUtils {
         result.importedPeriodic?.push({
           id: `prev-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
           category: cleanCat,
-          mainDepartment: matchingAsset?.mainDepartment || 'عام',
+          mainDepartment: matchingAsset?.mainDepartment || 'غير محدد',
           subDepartment: matchingAsset?.subDepartment,
           assetId: matchingAsset?.id || assetId,
           customId: assetId,
