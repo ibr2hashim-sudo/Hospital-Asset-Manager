@@ -5,7 +5,6 @@ import {
   X,
   RefreshCw,
   CheckCircle2,
-  Palette,
   HardDrive,
   CloudOff,
 } from 'lucide-react';
@@ -169,31 +168,6 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
                   يمسح كافة البيانات نهائياً من السحابة وجميع الأجهزة.
                 </p>
               </button>
-            </div>
-
-            {/* Warning / Info Banner */}
-            {mode === 'local' ? (
-              <div className="p-3.5 bg-sky-50 border border-sky-200 rounded-xl space-y-1 text-xs text-sky-900">
-                <span className="font-bold block">ماذا سيحدث عند التصفير المحلي؟</span>
-                <p className="leading-relaxed">
-                  سيتم مسح البيانات والصور المخزنة مؤقتاً في هذا المتصفح فقط (الأصول، الصيانة، الجرد، السيتات الجراحية)، ثم سحب نسخة نظيفة ومحدثة من السحابة تلقائياً دون التأثير على السحابة أو الأجهزة الأخرى.
-                </p>
-              </div>
-            ) : (
-              <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl space-y-1 text-xs text-red-800">
-                <span className="font-bold block">⚠️ تحذير شديد الأهمية (مسح سحابي ومحلي):</span>
-                <p className="leading-relaxed">
-                  سيتم حذف كافة الأصول، طلبات الصيانة الدورية والبلاغات، جلسات الجرد، السيتات والأدوات الجراحية، الصور السحابية والمحلية، والحسابات الإضافية نهائياً من السحابة ومن جميع الأجهزة، وإعادة حساب <span className="font-mono font-bold">Admin</span> الافتراضي فقط.
-                </p>
-              </div>
-            )}
-
-            {/* Appearance preservation notice */}
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2.5 text-xs text-emerald-900">
-              <Palette className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>
-                <strong>ملاحظة:</strong> سيتم الاحتفاظ بإعدادات المظهر (الشعار، اسم النظام، أسماء النوافذ، والخط والتنسيق) دون أي تغيير.
-              </span>
             </div>
 
             {errorMsg && (
