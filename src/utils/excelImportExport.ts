@@ -36,14 +36,25 @@ export interface ComprehensiveDatabaseData {
 }
 
 export class ExcelUtils {
-  // Normalize string for flexible matching
+  private static cleanCellText(raw: unknown): string {
+    return String(raw ?? '')
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF\u00A0]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Normalize string for flexible matching (handles NFKC presentation forms, invisible RTL/LTR marks, tashkeel, tatweel, and Farsi/Arabic variants)
   private static normalizeKey(key: string): string {
-    return key
+    return String(key ?? '')
+      .normalize('NFKC')
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF\u00A0]/g, '')
+      .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
       .toLowerCase()
-      .replace(/[\s\-_.:/()]/g, '')
-      .replace(/[أإآ]/g, 'ا')
+      .replace(/[\s\-_.:/()\\،,]+/g, '')
+      .replace(/[أإآٱ]/g, 'ا')
       .replace(/ة/g, 'ه')
-      .replace(/ى/g, 'ي')
+      .replace(/[ىی]/g, 'ي')
+      .replace(/ک/g, 'ك')
       .trim();
   }
 
@@ -357,27 +368,148 @@ export class ExcelUtils {
     }
 
     // -------------------------------------------------------------------------
-    // A. Parse Assets Sheet (or First Sheet)
+    // A. Parse Assets Sheet (Smart Sheet & Header Row Detection)
     // -------------------------------------------------------------------------
-    let assetSheetName = sheetNames.find(
-      (n) =>
-        ExcelUtils.normalizeKey(n) === 'assests' ||
-        ExcelUtils.normalizeKey(n) === 'assets' ||
-        ExcelUtils.normalizeKey(n) === 'الاصول' ||
-        ExcelUtils.normalizeKey(n) === 'الاجهزه'
-    );
-    if (!assetSheetName) {
-      assetSheetName = sheetNames[0];
+    const isMainDeptHeader = (nc: string) =>
+      nc === 'القسم' ||
+      nc === 'القسمالرئيسي' ||
+      nc === 'اسمالقسم' ||
+      nc === 'department' ||
+      nc === 'maindepartment' ||
+      nc === 'maindept' ||
+      nc === 'dept' ||
+      nc === 'section';
+
+    const isSubDeptHeader = (nc: string) =>
+      nc === 'القسمالداخلي' ||
+      nc === 'القسمالفرعي' ||
+      nc === 'الفرعي' ||
+      nc === 'subdepartment' ||
+      nc === 'subdept' ||
+      nc === 'internaldepartment' ||
+      nc === 'العياده' ||
+      nc === 'الغرفه';
+
+    const isDeviceNameHeader = (nc: string) =>
+      nc === 'devicename' ||
+      nc === 'اسمالجهاز' ||
+      nc === 'الجهاز' ||
+      nc === 'البيان' ||
+      nc === 'الصنف' ||
+      nc === 'الوصف' ||
+      nc === 'name' ||
+      nc === 'item';
+
+    const isKnownAssetCol = (nc: string) =>
+      isMainDeptHeader(nc) ||
+      isSubDeptHeader(nc) ||
+      isDeviceNameHeader(nc) ||
+      nc === 'code' ||
+      nc === 'id' ||
+      nc === 'customid' ||
+      nc === 'assetid' ||
+      nc === 'كود' ||
+      nc === 'كودالجهاز' ||
+      nc === 'الكميه' ||
+      nc === 'الكميهالدفتريه' ||
+      nc === 'model' ||
+      nc === 'serialnumber' ||
+      nc === 'serialnum' ||
+      nc === 'company';
+
+    const scoreSheetForAssets = (sheet: XLSX.WorkSheet): { score: number; headerRowIdx: number } => {
+      const matrix = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: '' });
+      let bestScore = -1;
+      let bestRow = 0;
+      const maxScan = Math.min(matrix.length, 10);
+      for (let r = 0; r < maxScan; r++) {
+        const rowArr = Array.isArray(matrix[r]) ? matrix[r] : [];
+        let rowScore = 0;
+        let hasDept = false;
+        let hasName = false;
+        rowArr.forEach((cell) => {
+          const nc = ExcelUtils.normalizeKey(ExcelUtils.cleanCellText(cell));
+          if (!nc) return;
+          if (isKnownAssetCol(nc)) rowScore += 1;
+          if (isMainDeptHeader(nc)) hasDept = true;
+          if (isDeviceNameHeader(nc)) hasName = true;
+        });
+        if (hasDept) rowScore += 3;
+        if (hasName) rowScore += 3;
+        if (rowScore > bestScore) {
+          bestScore = rowScore;
+          bestRow = r;
+        }
+      }
+      return { score: bestScore, headerRowIdx: bestRow };
+    };
+
+    let assetSheetName = sheetNames.find((n) => {
+      const nk = ExcelUtils.normalizeKey(n);
+      return nk === 'assests' || nk === 'assets' || nk === 'الاصول' || nk === 'الاجهزه';
+    });
+    let headerRowIdx = 0;
+
+    if (assetSheetName && workbook.Sheets[assetSheetName]) {
+      const info = scoreSheetForAssets(workbook.Sheets[assetSheetName]);
+      headerRowIdx = info.headerRowIdx;
+      // If named sheet didn't have asset headers, search all sheets for the best match
+      if (info.score < 3) {
+        let bestSheet = assetSheetName;
+        let bestScore = info.score;
+        for (const name of sheetNames) {
+          const sInfo = scoreSheetForAssets(workbook.Sheets[name]);
+          if (sInfo.score > bestScore) {
+            bestScore = sInfo.score;
+            bestSheet = name;
+            headerRowIdx = sInfo.headerRowIdx;
+          }
+        }
+        assetSheetName = bestSheet;
+      }
+    } else {
+      let bestSheet = sheetNames[0];
+      let bestScore = -1;
+      for (const name of sheetNames) {
+        const sInfo = scoreSheetForAssets(workbook.Sheets[name]);
+        if (sInfo.score > bestScore) {
+          bestScore = sInfo.score;
+          bestSheet = name;
+          headerRowIdx = sInfo.headerRowIdx;
+        }
+      }
+      assetSheetName = bestSheet;
     }
 
-    const assetSheet = workbook.Sheets[assetSheetName];
+    const assetSheet = assetSheetName ? workbook.Sheets[assetSheetName] : undefined;
     if (assetSheet) {
-      const rows: any[] = XLSX.utils.sheet_to_json(assetSheet, { defval: '' });
+      const rawMatrix = XLSX.utils.sheet_to_json<any[]>(assetSheet, { header: 1, defval: '' });
+      const rawHeaders = Array.isArray(rawMatrix[headerRowIdx]) ? rawMatrix[headerRowIdx] : [];
+      const headers = rawHeaders.map((h) => ExcelUtils.cleanCellText(h));
+
+      // Resolve merged cells explicitly defined in the Excel worksheet so multi-row merged department cells work cleanly
+      const merges: XLSX.Range[] = Array.isArray(assetSheet['!merges']) ? assetSheet['!merges'] : [];
+      const getMergedOrCellValue = (rIdx: number, cIdx: number): string => {
+        const direct = ExcelUtils.cleanCellText(rawMatrix[rIdx]?.[cIdx]);
+        if (direct) return direct;
+        for (const m of merges) {
+          if (rIdx >= m.s.r && rIdx <= m.e.r && cIdx >= m.s.c && cIdx <= m.e.c) {
+            return ExcelUtils.cleanCellText(rawMatrix[m.s.r]?.[m.s.c]);
+          }
+        }
+        return '';
+      };
+
       const existingIds = new Set(existingAssets.map((a) => a.customId.trim().toLowerCase()));
       const batchNewIds = new Set<string>();
+      let loggedHeaderDiagnostic = false;
 
-      rows.forEach((row, idx) => {
-        const rowNumber = idx + 2;
+      for (let rIdx = headerRowIdx + 1; rIdx < rawMatrix.length; rIdx++) {
+        const rowArr = Array.isArray(rawMatrix[rIdx]) ? rawMatrix[rIdx] : [];
+        const hasAnyValue = rowArr.some((cell) => ExcelUtils.cleanCellText(cell) !== '');
+        if (!hasAnyValue) continue;
+
+        const rowNumber = rIdx + 1;
 
         let mainDept = '';
         let subDept = '';
@@ -394,43 +526,24 @@ export class ExcelUtils {
         let notes = '';
         let imageUrl = '';
 
-        Object.entries(row).forEach(([colName, colVal]) => {
-          const val = String(colVal ?? '').trim();
+        headers.forEach((colName, cIdx) => {
+          if (!colName) return;
           const normCol = ExcelUtils.normalizeKey(colName);
+          const val =
+            isMainDeptHeader(normCol) || isSubDeptHeader(normCol)
+              ? getMergedOrCellValue(rIdx, cIdx)
+              : ExcelUtils.cleanCellText(rowArr[cIdx]);
 
           // القسم: القسم / القسم الرئيسي / department / maindepartment
-          if (
-            normCol === 'القسم' ||
-            normCol === 'القسمالرئيسي' ||
-            normCol === 'department' ||
-            normCol === 'maindepartment' ||
-            normCol === 'dept'
-          ) {
-            mainDept = val;
+          if (isMainDeptHeader(normCol)) {
+            if (val) mainDept = val;
           }
           // القسم الداخلي: القسم الداخلي / القسم الفرعي / subdepartment / internaldepartment / clinic / room
-          else if (
-            normCol === 'القسمالداخلي' ||
-            normCol === 'القسمالفرعي' ||
-            normCol === 'subdepartment' ||
-            normCol === 'subdept' ||
-            normCol === 'internaldepartment' ||
-            normCol === 'العياده' ||
-            normCol === 'الغرفه'
-          ) {
-            subDept = val;
+          else if (isSubDeptHeader(normCol)) {
+            if (val) subDept = val;
           }
           // Device Name: اسم الجهاز / الجهاز / البيان / الصنف / devicename / item / name
-          else if (
-            normCol === 'devicename' ||
-            normCol === 'اسمالجهاز' ||
-            normCol === 'الجهاز' ||
-            normCol === 'البيان' ||
-            normCol === 'الصنف' ||
-            normCol === 'الوصف' ||
-            normCol === 'name' ||
-            normCol === 'item'
-          ) {
+          else if (isDeviceNameHeader(normCol)) {
             deviceName = val;
           }
           // Code / Asset ID: Code / كود / ID / customid / barcode / كودالجهاز
@@ -472,9 +585,10 @@ export class ExcelUtils {
           ) {
             model = val;
           }
-          // Serial Number: Serial Number / الرقم التسلسلي / sn / serial
+          // Serial Number: Serial Number / Serial Num / الرقم التسلسلي / sn / serial
           else if (
             normCol === 'serialnumber' ||
+            normCol === 'serialnum' ||
             normCol === 'sn' ||
             normCol === 'الرقمالتسلسلي' ||
             normCol === 'serial'
@@ -522,15 +636,22 @@ export class ExcelUtils {
 
         if (!deviceName) {
           result.errorCount++;
-          result.errors.push(`السطر ${rowNumber} في صفحة الأصول: اسم الجهاز مفقود`);
-          return;
+          result.errors.push(`السطر ${rowNumber} في ورقة "${assetSheetName}": اسم الجهاز مفقود`);
+          continue;
         }
 
         if (!mainDept && subDept) mainDept = subDept;
         if (!mainDept) {
+          if (!loggedHeaderDiagnostic) {
+            loggedHeaderDiagnostic = true;
+            const visibleCols = headers.filter(Boolean).slice(0, 8).join(' | ');
+            result.errors.push(
+              `معلومات الفحص — الورقة المقروءة: "${assetSheetName}" (سطر العناوين ${headerRowIdx + 1}) | الأعمدة: [${visibleCols}]`
+            );
+          }
           result.errorCount++;
-          result.errors.push(`السطر ${rowNumber} في صفحة الأصول: القسم الرئيسي مفقود (تم تخطي الصنف "${deviceName}")`);
-          return;
+          result.errors.push(`السطر ${rowNumber} في ورقة "${assetSheetName}": القسم الرئيسي مفقود (تم تخطي الصنف "${deviceName}")`);
+          continue;
         }
         if (!subDept) subDept = mainDept;
 
@@ -597,7 +718,7 @@ export class ExcelUtils {
 
         result.importedAssets.push(newAsset);
         result.successCount++;
-      });
+      }
     }
 
     // -------------------------------------------------------------------------
