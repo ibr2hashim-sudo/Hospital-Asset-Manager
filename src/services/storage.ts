@@ -15,7 +15,7 @@ import {
   SurgicalSet,
   SurgicalInstrument,
 } from '../types';
-import { FirestoreSyncService } from './firestoreSync';
+import { FirestoreSyncService, CloudWipeProgress } from './firestoreSync';
 import JSZip from 'jszip';
 
 const STORAGE_KEYS = {
@@ -207,11 +207,25 @@ export async function clearImageDB(): Promise<void> {
   try {
     const db = await openImageDB();
     return new Promise((resolve) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      const store = tx.objectStore(IDB_STORE);
-      store.clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => resolve();
+      let settled = false;
+      const done = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve();
+        }
+      };
+      const timer = setTimeout(done, 4000);
+      try {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        const store = tx.objectStore(IDB_STORE);
+        store.clear();
+        tx.oncomplete = done;
+        tx.onerror = done;
+        tx.onabort = done;
+      } catch {
+        done();
+      }
     });
   } catch {
     // fallback
@@ -2497,7 +2511,8 @@ export class StorageService {
    * Local Cache Reset & Clean Resync from Cloud (does NOT delete cloud data, preserves appearance settings).
    */
   static async resetLocalAndResyncFromCloud(
-    adminPassword: string
+    adminPassword: string,
+    onProgress?: (progress: CloudWipeProgress) => void
   ): Promise<{ success: boolean; message: string }> {
     if (!this.verifyAdminPassword(adminPassword)) {
       return {
@@ -2509,13 +2524,45 @@ export class StorageService {
     const prevUser = this.getCurrentUser();
     const backupUsers = this.getUsers();
 
+    onProgress?.({
+      stageLabel: 'جاري تنظيف البيانات والصور المؤقتة على هذا الجهاز...',
+      stepIndex: 1,
+      totalSteps: 2,
+      deletedSoFar: 0,
+    });
+
     await this.clearLocalOperationalData({
       resetUsersToDefault: false,
       clearSyncFlags: true,
     });
     localStorage.removeItem(STORAGE_KEYS.USERS);
 
-    const pullRes = await FirestoreSyncService.pullAllCloudDataToLocal();
+    onProgress?.({
+      stageLabel: 'جاري سحب نسخة نظيفة من السحابة...',
+      stepIndex: 2,
+      totalSteps: 2,
+      deletedSoFar: 0,
+    });
+
+    let pullRes: { success: boolean; message: string };
+    try {
+      pullRes = await Promise.race([
+        FirestoreSyncService.pullAllCloudDataToLocal(),
+        new Promise<{ success: boolean; message: string }>((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                success: false,
+                message: 'انتهت مهلة سحب البيانات من السحابة. تحقق من الاتصال بالإنترنت وحاول مجدداً.',
+              }),
+            45000
+          )
+        ),
+      ]);
+    } catch (err: any) {
+      pullRes = { success: false, message: err?.message || 'خطأ أثناء المزامنة السحابية' };
+    }
+
     if (!pullRes.success) {
       // Restore user session so admin is not locked out if offline
       if (backupUsers.length > 0) {
@@ -2562,7 +2609,8 @@ export class StorageService {
    * Full Factory Reset (Cloud + Local Wipe, keeping appearance/branding settings intact).
    */
   static async factoryReset(
-    adminPassword: string
+    adminPassword: string,
+    onProgress?: (progress: CloudWipeProgress) => void
   ): Promise<{ success: boolean; message: string }> {
     if (!this.verifyAdminPassword(adminPassword)) {
       return {
@@ -2577,7 +2625,10 @@ export class StorageService {
     };
 
     // 1. Wipe Firestore cloud collections first (preserving settings/branding)
-    const cloudRes = await FirestoreSyncService.wipeAllCloudDataKeepingAppearance(freshAdmin);
+    const cloudRes = await FirestoreSyncService.wipeAllCloudDataKeepingAppearance(
+      freshAdmin,
+      onProgress
+    );
     if (!cloudRes.success) {
       return {
         success: false,

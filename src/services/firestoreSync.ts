@@ -9,6 +9,7 @@ import {
   writeBatch,
   query,
   where,
+  limit,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -51,6 +52,29 @@ interface RecentChange {
   id: string;
   action: 'set' | 'delete';
   timestamp: number;
+}
+
+export interface CloudWipeProgress {
+  stageLabel: string;
+  stepIndex: number;
+  totalSteps: number;
+  deletedSoFar: number;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, timeoutMessage: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 }
 
 interface SyncMetaDoc {
@@ -606,18 +630,26 @@ export class FirestoreSyncService {
         assetIds.slice(i, i + CHUNK).forEach((id) => {
           batch.delete(doc(db, 'assets', id));
         });
-        await batch.commit();
+        await withTimeout(
+          batch.commit(),
+          25000,
+          'انتهت مهلة الاتصال بالسحابة أثناء حذف الأجهزة. تحقق من الإنترنت وحاول مجدداً.'
+        );
       }
 
       const nowTs = Date.now();
-      await setDoc(
-        doc(db, 'settings', 'sync_meta'),
-        {
-          version: nowTs,
-          lastUpdated: new Date(nowTs).toISOString(),
-          resyncAssetsAt: nowTs,
-        },
-        { merge: true }
+      await withTimeout(
+        setDoc(
+          doc(db, 'settings', 'sync_meta'),
+          {
+            version: nowTs,
+            lastUpdated: new Date(nowTs).toISOString(),
+            resyncAssetsAt: nowTs,
+          },
+          { merge: true }
+        ),
+        15000,
+        'انتهت مهلة تحديث حالة المزامنة في السحابة.'
       );
 
       this.backendUnavailable = false;
@@ -1803,64 +1835,119 @@ export class FirestoreSyncService {
     }
   }
 
-  private static async deleteCollectionInBatches(colName: string): Promise<number> {
-    const snap = await getDocs(collection(db, colName));
-    if (snap.empty) return 0;
+  private static async deleteCollectionInBatches(
+    colName: string,
+    label: string,
+    pageLimit: number,
+    onChunkDeleted?: (chunkCount: number) => void
+  ): Promise<number> {
+    let totalDeleted = 0;
+    const colRef = collection(db, colName);
 
-    const docs = snap.docs;
-    const CHUNK = 400;
-    for (let i = 0; i < docs.length; i += CHUNK) {
+    while (true) {
+      const snap = await withTimeout(
+        getDocs(query(colRef, limit(pageLimit))),
+        25000,
+        `انتهت مهلة قراءة (${label}) من السحابة. تحقق من الاتصال أو الحصة اليومية.`
+      );
+      if (snap.empty) break;
+
       const batch = writeBatch(db);
-      docs.slice(i, i + CHUNK).forEach((d) => batch.delete(d.ref));
-      await batch.commit();
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await withTimeout(
+        batch.commit(),
+        25000,
+        `انتهت مهلة حذف دفعة من (${label}) في السحابة. تحقق من الاتصال أو الحصة اليومية.`
+      );
+
+      totalDeleted += snap.size;
+      if (onChunkDeleted) {
+        onChunkDeleted(snap.size);
+      }
+
+      if (snap.size < pageLimit) break;
     }
-    return docs.length;
+
+    return totalDeleted;
   }
 
   /**
    * Full Cloud Wipe for Factory Reset:
-   * Deletes all operational collections & extra users & cloud images,
-   * restores ONLY defaultAdmin and default categories,
+   * Paginates safely (small chunks for cloud images), enforces per-step timeouts,
+   * reports live progress, restores ONLY defaultAdmin and default categories,
    * and PRESERVES settings/branding (appearance, logo, fonts, window labels).
    */
   static async wipeAllCloudDataKeepingAppearance(
-    defaultAdmin: User
+    defaultAdmin: User,
+    onProgress?: (progress: CloudWipeProgress) => void
   ): Promise<{ success: boolean; message: string; resetAt?: number }> {
+    let deletedDocs = 0;
     try {
-      const collectionsToWipe = [
-        'assets',
-        'tickets',
-        'periodic_records',
-        'audit_sessions',
-        'surgical_sets',
-        'surgical_instruments',
-        'asset_cloud_images',
-        'users',
+      const wipeTargets: Array<{ col: string; label: string; pageLimit: number }> = [
+        { col: 'assets', label: 'الأصول والعهد', pageLimit: 350 },
+        { col: 'tickets', label: 'بلاغات الصيانة', pageLimit: 350 },
+        { col: 'periodic_records', label: 'سجلات الصيانة الدورية', pageLimit: 350 },
+        { col: 'audit_sessions', label: 'جلسات الجرد', pageLimit: 250 },
+        { col: 'surgical_sets', label: 'السيتات الجراحية', pageLimit: 350 },
+        { col: 'surgical_instruments', label: 'الأدوات الجراحية', pageLimit: 350 },
+        { col: 'asset_cloud_images', label: 'الصور السحابية', pageLimit: 35 },
+        { col: 'users', label: 'حسابات المستخدمين', pageLimit: 350 },
       ];
 
-      let deletedDocs = 0;
-      for (const colName of collectionsToWipe) {
-        deletedDocs += await this.deleteCollectionInBatches(colName);
+      const totalSteps = wipeTargets.length + 1;
+
+      for (let i = 0; i < wipeTargets.length; i++) {
+        const target = wipeTargets[i];
+        onProgress?.({
+          stageLabel: `جاري مسح ${target.label} من السحابة...`,
+          stepIndex: i + 1,
+          totalSteps,
+          deletedSoFar: deletedDocs,
+        });
+
+        await this.deleteCollectionInBatches(
+          target.col,
+          target.label,
+          target.pageLimit,
+          (chunkCount) => {
+            deletedDocs += chunkCount;
+            onProgress?.({
+              stageLabel: `جاري مسح ${target.label} من السحابة...`,
+              stepIndex: i + 1,
+              totalSteps,
+              deletedSoFar: deletedDocs,
+            });
+          }
+        );
       }
 
-      // Restore only the default admin user in cloud
-      await setDoc(doc(db, 'users', defaultAdmin.id), cleanForFirestore(defaultAdmin));
-
-      // Reset periodic categories to defaults (keep settings/branding intact!)
-      await setDoc(doc(db, 'settings', 'categories'), {
-        list: ['التكييف', 'الزيوت والفلاتر', 'البطاريات'],
-        updatedAt: new Date().toISOString(),
+      onProgress?.({
+        stageLabel: 'جاري تهيئة حساب الأدمن الافتراضي وتنظيف الجهاز...',
+        stepIndex: totalSteps,
+        totalSteps,
+        deletedSoFar: deletedDocs,
       });
 
       const resetAt = Date.now();
-      await setDoc(doc(db, 'settings', 'sync_meta'), {
-        version: resetAt,
-        lastUpdated: new Date(resetAt).toISOString(),
-        recentChanges: [],
-        assetsCount: 0,
-        ticketsCount: 0,
-        fullResetAt: resetAt,
-      });
+      await withTimeout(
+        Promise.all([
+          setDoc(doc(db, 'users', defaultAdmin.id), cleanForFirestore(defaultAdmin)),
+          setDoc(doc(db, 'settings', 'categories'), {
+            list: ['التكييف', 'الزيوت والفلاتر', 'البطاريات'],
+            updatedAt: new Date(resetAt).toISOString(),
+          }),
+          setDoc(doc(db, 'settings', 'sync_meta'), {
+            version: resetAt,
+            lastUpdated: new Date(resetAt).toISOString(),
+            recentChanges: [],
+            assetsCount: 0,
+            ticketsCount: 0,
+            fullResetAt: resetAt,
+          }),
+        ]),
+        20000,
+        'انتهت مهلة حفظ الإعدادات الأولية في السحابة.'
+      );
 
       this.backendUnavailable = false;
       this.quotaExceeded = false;
@@ -1873,9 +1960,10 @@ export class FirestoreSyncService {
       };
     } catch (err: any) {
       this.handleSyncError('wipeAllCloudDataKeepingAppearance', err);
+      const partialNote = deletedDocs > 0 ? ` (تم مسح ${deletedDocs} سجل قبل التوقف)` : '';
       return {
         success: false,
-        message: `تعذر مسح البيانات من السحابة: ${err?.message || 'تحقق من الاتصال بالإنترنت ثم أعد المحاولة'}`,
+        message: `تعذر إكمال المسح من السحابة: ${err?.message || 'تحقق من الاتصال بالإنترنت ثم أعد المحاولة'}${partialNote}`,
       };
     }
   }

@@ -9,6 +9,7 @@ import {
   CloudOff,
 } from 'lucide-react';
 import { StorageService } from '../services/storage';
+import { CloudWipeProgress } from '../services/firestoreSync';
 import { clearSurgicalImageCache } from './SurgicalImage';
 
 interface FactoryResetModalProps {
@@ -28,6 +29,7 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [progress, setProgress] = useState<CloudWipeProgress | null>(null);
 
   const handleModeChange = (nextMode: ResetMode) => {
     if (isProcessing) return;
@@ -51,26 +53,41 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
     }
 
     setIsProcessing(true);
+    setProgress({
+      stageLabel: mode === 'local' ? 'جاري البدء بالتصفير المحلي...' : 'جاري بدء الاتصال بالسحابة...',
+      stepIndex: 0,
+      totalSteps: mode === 'local' ? 2 : 9,
+      deletedSoFar: 0,
+    });
+
     try {
       clearSurgicalImageCache();
 
       const res =
         mode === 'local'
-          ? await StorageService.resetLocalAndResyncFromCloud(adminPassword.trim())
-          : await StorageService.factoryReset(adminPassword.trim());
+          ? await StorageService.resetLocalAndResyncFromCloud(adminPassword.trim(), setProgress)
+          : await StorageService.factoryReset(adminPassword.trim(), setProgress);
 
       if (res.success) {
         setSuccessMsg(res.message);
         setIsProcessing(false);
+        setProgress(null);
       } else {
         setErrorMsg(res.message || 'تعذر تنفيذ العملية');
         setIsProcessing(false);
+        setProgress(null);
       }
     } catch (err: any) {
       setErrorMsg(err?.message || 'حدث خطأ غير متوقع أثناء تنفيذ العملية');
       setIsProcessing(false);
+      setProgress(null);
     }
   };
+
+  const progressPercent =
+    progress && progress.totalSteps > 0
+      ? Math.min(100, Math.max(5, Math.round((progress.stepIndex / progress.totalSteps) * 100)))
+      : 5;
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4">
@@ -169,6 +186,31 @@ export const FactoryResetModal: React.FC<FactoryResetModalProps> = ({
                 </p>
               </button>
             </div>
+
+            {isProcessing && progress && (
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-800">{progress.stageLabel}</span>
+                  <span className="font-mono font-bold text-slate-600">{progressPercent}%</span>
+                </div>
+                <div className="w-full h-2.5 rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      mode === 'full' ? 'bg-red-600' : 'bg-sky-600'
+                    }`}
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                </div>
+                {mode === 'full' && (
+                  <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <span>المرحلة {progress.stepIndex} من {progress.totalSteps}</span>
+                    <span className="font-mono font-bold text-slate-700">
+                      تم مسح {progress.deletedSoFar} سجل
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {errorMsg && (
               <div className="p-3 bg-red-100 text-red-700 rounded-xl text-xs font-bold border border-red-200">
